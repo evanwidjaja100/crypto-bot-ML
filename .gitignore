@@ -1,0 +1,16 @@
+# Secrets — never commit
+.env
+
+# Runtime data and artifacts
+data/
+logs/
+artifacts/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+*.egg-info/
+dist/
+build/

@@ -1,0 +1,112 @@
+"""End-to-end model tests on synthetic data: train, evaluate, persist, load."""
+from __future__ import annotations
+
+import pandas as pd
+import pytest
+
+from conftest import make_candles
+from src.config import FeatureSettings, LabelSettings, LgbmSettings
+from src.features.pipeline import build_feature_frame
+from src.labels.dataset import split_chronological
+from src.labels.labeler import add_labels
+from src.models.baseline import train_logistic
+from src.models.evaluate import classification_metrics
+from src.models.store import latest_model, load_model, make_model_id, save_model
+from src.models.train import train_lgbm
+
+
+@pytest.fixture
+def dataset():
+    df = make_candles(3000, seed=42, vol=0.002)
+    featured, cols = build_feature_frame(df, FeatureSettings())
+    labeled = add_labels(featured, LabelSettings()).dropna(subset=["label"])
+    train, val, test, _ = split_chronological(labeled)
+    return train, val, test, cols
+
+
+def test_logistic_trains_and_evals(dataset):
+    train, val, test, cols = dataset
+    model = train_logistic(train[cols], train["label"].astype(int), seed=1)
+    m = classification_metrics(
+        test["label"].astype(int), model.predict(test[cols]), model.predict_proba(test[cols])
+    )
+    assert 0.0 <= m["accuracy"] <= 1.0
+    assert m["log_loss"] > 0.0
+
+
+def test_lgbm_trains_with_early_stopping(dataset):
+    train, val, test, cols = dataset
+    cfg = LgbmSettings(n_estimators=50, early_stopping_rounds=10)
+    model = train_lgbm(train[cols], train["label"].astype(int),
+                       val[cols], val["label"].astype(int), cfg, seed=1)
+    m = classification_metrics(
+        test["label"].astype(int), model.predict(test[cols]), model.predict_proba(test[cols])
+    )
+    assert 0.0 <= m["accuracy"] <= 1.0
+    assert model.predict_proba(test[cols]).shape[1] == 3
+
+
+def test_lgbm_better_than_random_sanity(dataset):
+    train, val, test, cols = dataset
+    cfg = LgbmSettings(n_estimators=50, early_stopping_rounds=10)
+    model = train_lgbm(train[cols], train["label"].astype(int),
+                       val[cols], val["label"].astype(int), cfg, seed=1)
+    m = classification_metrics(
+        test["label"].astype(int), model.predict(test[cols]), model.predict_proba(test[cols])
+    )
+    assert m["accuracy"] > 0.33  # above random for 3 classes (sanity only)
+
+
+def test_store_roundtrip(tmp_path, dataset):
+    train, val, test, cols = dataset
+    cfg = LgbmSettings(n_estimators=20, early_stopping_rounds=5)
+    model = train_lgbm(train[cols], train["label"].astype(int),
+                       val[cols], val["label"].astype(int), cfg, seed=1)
+    model_id = make_model_id("BTCUSDT", "5", "abc12345")
+    meta = save_model(
+        model,
+        {"model_id": model_id, "symbol": "BTCUSDT", "interval": "5",
+         "feature_set_id": "abc12345", "metrics": {"test_accuracy": 0.5}},
+        tmp_path, framework="lightgbm",
+    )
+    loaded, loaded_meta = load_model(model_id, tmp_path)
+    assert loaded_meta["framework"] == "lightgbm"
+    assert "created_at" in loaded_meta
+    pred_a = model.predict(test[cols])
+    pred_b = loaded.predict(test[cols])
+    assert (pred_a == pred_b).all()
+
+    latest, _ = latest_model(tmp_path)
+    assert latest is not None
+
+
+def test_store_latest_empty(tmp_path):
+    assert latest_model(tmp_path) is None
+
+
+def test_same_model_id_different_types_do_not_collide(tmp_path, dataset):
+    """Two trainers on the same base id (same timestamp prefix) must not
+    overwrite each other's artifacts; the registry must resolve the right one."""
+    train, val, test, cols = dataset
+    y = train["label"].astype(int)
+    lgb = train_lgbm(train[cols], y, val[cols], val["label"].astype(int),
+                     LgbmSettings(n_estimators=10, early_stopping_rounds=5), seed=1)
+    lin = train_logistic(train[cols], y, seed=2)
+
+    model_id = "BTCUSDT_5_abc12345_same_stamp"  # identical id for both
+    save_model(lin, {"model_id": model_id, "model_type": "logistic"}, tmp_path, framework="sklearn")
+    save_model(lgb, {"model_id": model_id, "model_type": "lightgbm"}, tmp_path, framework="lightgbm")
+
+    assert (tmp_path / "models" / f"{model_id}-logistic.pkl").exists()
+    assert (tmp_path / "models" / f"{model_id}-lightgbm.pkl").exists()
+
+    import json
+    entries = json.loads((tmp_path / "models.json").read_text())
+    assert entries == [
+        {"model_id": model_id, "model_type": "logistic"},
+        {"model_id": model_id, "model_type": "lightgbm"},
+    ]
+
+    loaded, meta = load_model(model_id, tmp_path)
+    assert meta["model_type"] == "lightgbm"  # most recent registry entry wins
+    assert (loaded.predict(test[cols]) == lgb.predict(test[cols])).all()
