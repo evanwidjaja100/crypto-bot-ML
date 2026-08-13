@@ -1148,3 +1148,35 @@ not the code — are the real distance to live.
    phase above must leave those intact —
    [`test_engine_paper_equivalence.py`](tests/test_engine_paper_equivalence.py) and
    [`test_executor.py`](tests/test_executor.py) staying green is the check that it did.
+
+---
+
+## Changelog
+
+### 2026-08-13 — Phase 0 complete (branch `remediation/phase-0-preflight`)
+
+- Tag `pre-remediation` at `da8a835`; quarantine under `data/quarantine/2026-08-13/` (3 corrupted
+  parquets + runner state/journals; bot was not running).
+- `uv` adopted: `requires-python = ">=3.11,<3.13"`, deps pinned to pickle-stable majors,
+  `uv.lock` committed, `.venv` rebuilt on CPython 3.12.13 (pandas 2.3.3, numpy 2.1.3,
+  sklearn 1.5.2, lightgbm 4.7.0, pyarrow 18.1.0). No suite drift from the downgrade.
+- 0.4: `annualized_return` overflow guarded (nan instead of inf/overflow); regression test added.
+- Suite: 133 -> 134 tests, `pytest -W error::RuntimeWarning` green.
+
+### 2026-08-13 — Phase 1 complete (branch `remediation/phase-1-data-integrity`)
+
+- 1.1 network-keyed `CandleStore` (filename + per-row column, mixed-write refusal, mandatory
+  validation in `write()`, legacy/unkeyed files rejected on load).
+- 1.2 market data always mainnet; `download_data.py --testnet` routes to a separate testnet store
+  with a loud banner.
+- 1.3 `max_bar_move_pct` (default 25.0) blocking check in `validate_candles`, configurable via
+  `data.max_bar_move_pct`, `--allow-jumps` escape hatch.
+- 1.4 runner validates on ingest (splicing cached tail) and trips the kill switch on a bad feed
+  before trading or persisting.
+- 1.5 wipe + mainnet redownload: `BTCUSDT_60_mainnet.parquet` 21,600 rows (2024-02-25 ->
+  2026-08-13), closes 49,786..125,981, max bar move 5.09%, zero >10% jumps, network uniform.
+- **Retrain verdict: FAIL (as predicted).** Clean-data engine gate: ret 0.0073, pf inf, n_trades 1
+  (min 30). The previous promoted model `BTCUSDT_60_37ec52b2` backtested on clean data:
+  total_return -11.63%, PF 0.428, 132 trades, 77 stop-loss exits. `min_promote` untouched;
+  Phase 8 does the science.
+- Suite: 134 -> 145 tests.
