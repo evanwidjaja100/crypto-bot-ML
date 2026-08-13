@@ -24,6 +24,7 @@ import pandas as pd
 
 from ..config import Settings
 from ..data_ingestion.intervals import INTERVAL_MS
+from ..data_ingestion.validation import validate_candles
 from ..execution.paper_broker import PaperBroker, PaperFill
 from ..features.pipeline import build_feature_frame
 from ..risk.gate import RiskGate
@@ -198,6 +199,20 @@ class BotRunner:
             )
 
         new_bars = closed[closed["ts_ms"] > self.last_ts]
+        if not new_bars.empty:
+            # validate on ingest, not on persist: the bar has not been traded
+            # on yet, and a bad feed halts the bot instead of being written to
+            # the cache. Splicing the cached tail catches a jump between the
+            # cache and the first new bar, not just within the batch.
+            recent = pd.concat([self.ctx.tail(2), new_bars], ignore_index=True)
+            report = validate_candles(
+                recent, self.interval_ms,
+                max_bar_move_pct=self.settings.data.max_bar_move_pct,
+            )
+            if not report.ok:
+                self.gate.kill_switch.trip(f"candle validation failed: {report.errors}")
+                log.error("candle validation failed: %s -> %s", report.summary(), report.errors)
+                raise RuntimeError("kill switch tripped: candle validation failed")
         records: list[dict] = []
         for _, bar in new_bars.iterrows():
             records += self._process_bar(bar)

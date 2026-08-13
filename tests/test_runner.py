@@ -326,3 +326,28 @@ def test_qty_rejected_by_exchange_rounding_journals(tmp_path):
     rejected = journal_records(runner, "rejected")
     assert len(rejected) == 1
     assert "below min order qty" in rejected[0]["reasons"]
+
+
+class JumpClient(FakeClient):
+    """Next bar closes 300% above the previous close — an impossible move."""
+
+    def __init__(self, df):
+        super().__init__(df)
+        jump_ts = int(df["ts_ms"].iloc[-1]) + IV
+        self.extra_bars = [[jump_ts, 100.0, 500.0, 99.0, 400.0, 10.0, 1000.0]]
+
+
+def test_bad_feed_trips_kill_switch_before_trading_or_persisting(tmp_path):
+    settings = make_settings(tmp_path)
+    client = JumpClient(make_frame())
+    runner = make_runner(tmp_path, settings, client)
+    runner.warmup()
+    n_stored = len(runner.store.load("BTCUSDT", "5"))
+
+    with pytest.raises(RuntimeError, match="kill switch tripped"):
+        runner.tick(now_ms=runner.last_ts + 2 * IV)
+
+    assert runner.gate.kill_switch.is_tripped()
+    assert runner.broker.direction == 0  # zero bars processed: no position
+    assert len(runner.store.load("BTCUSDT", "5")) == n_stored  # nothing persisted
+    assert journal_records(runner, "fill") == []
