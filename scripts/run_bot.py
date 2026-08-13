@@ -51,7 +51,7 @@ def main(argv: list[str] | None = None) -> int:
     log.info("model: %s (framework=%s)", meta["model_id"], meta["framework"])
 
     client = BybitClient(testnet=False)  # market data is public and always mainnet
-    store = CandleStore(settings.data.data_dir, network="mainnet")
+    store = CandleStore(settings.data.data_dir, network=settings.market_data_network)
 
     # refuse to run a stale model against the current feature pipeline:
     # a mismatched feature_set_id silently defeats the staleness guard
@@ -77,7 +77,7 @@ def main(argv: list[str] | None = None) -> int:
         from pybit.unified_trading import HTTP
 
         session = HTTP(
-            testnet=settings.env.bybit_testnet,
+            testnet=settings.order_endpoints_testnet,  # derived from mode, not env
             api_key=settings.env.bybit_api_key,
             api_secret=settings.env.bybit_api_secret,
             timeout=15,
@@ -85,7 +85,7 @@ def main(argv: list[str] | None = None) -> int:
         from src.execution.bybit_executor import BybitExecutor
 
         executor = BybitExecutor(session, settings.symbol)
-        log.info("exchange mode=%s executor enabled", settings.mode)
+        log.warning("ORDERS -> %s (mode=%s)", settings.trading_network, settings.mode)
     else:
         log.info("paper mode: local fill simulation only")
 
