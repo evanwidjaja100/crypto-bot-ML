@@ -18,9 +18,17 @@ class RiskGate:
     with its reasons; a rejection due to the kill switch is final until the
     operator resets it."""
 
-    def __init__(self, cfg: RiskSettings, initial_equity: float) -> None:
+    def __init__(
+        self,
+        cfg: RiskSettings,
+        initial_equity: float,
+        *,
+        tombstone_path=None,
+    ) -> None:
         self.cfg = cfg
-        self.kill_switch = KillSwitch(cfg.max_api_error_streak)
+        self.kill_switch = KillSwitch(
+            cfg.max_api_error_streak, tombstone_path=tombstone_path
+        )
         self.daily_loss = DailyLossTracker(cfg.max_daily_loss_pct, initial_equity)
 
     def approve_entry(

@@ -106,6 +106,65 @@ def test_daily_loss_resets_on_new_day():
     assert tracker.allowed(day2)
 
 
+def test_daily_loss_snapshot_restore_roundtrip():
+    """The review's scenario: lose 2%+, restart, and the limit must still hold."""
+    tracker = DailyLossTracker(max_daily_loss_pct=2.0, initial_equity=10_000)
+    ts = 1_700_000_000_000
+    tracker.update(-250.0, ts, 9_750)  # over the 2% limit
+    snap = tracker.snapshot()
+
+    fresh = DailyLossTracker(max_daily_loss_pct=2.0, initial_equity=10_000)
+    assert fresh.allowed(ts)  # a fresh tracker forgets the loss...
+    fresh.restore(snap)
+    assert not fresh.allowed(ts)  # ...but restore brings it back
+    assert fresh.allowed(ts + 86_400_000)  # a new day must still reset
+
+
+def test_daily_loss_restore_rejects_missing_fields():
+    tracker = DailyLossTracker(max_daily_loss_pct=2.0, initial_equity=10_000)
+    tracker.restore({"pnl": -500.0})  # no day: like a fresh tracker
+    assert tracker.allowed(1_700_000_000_000)
+
+
+def test_daily_loss_reset_restores_equity_base():
+    tracker = DailyLossTracker(max_daily_loss_pct=2.0, initial_equity=10_000)
+    ts = 1_700_000_000_000
+    tracker.update(-100.0, ts, 9_000)  # equity base moves to 9k
+    tracker.reset()
+    assert tracker.snapshot() == {"day": None, "pnl": 0.0, "equity_base": 10_000.0}
+
+
+def test_kill_switch_tombstone_survives_restart(tmp_path):
+    path = tmp_path / "KILL_SWITCH.json"
+    ks = KillSwitch(tombstone_path=path)
+    ks.trip("reconciliation mismatch")
+    assert path.exists()
+    assert ks.tripped_at() is not None
+
+    ks2 = KillSwitch(tombstone_path=path)  # a fresh process on the same path
+    assert ks2.is_tripped()
+    assert ks2.describe() == "reconciliation mismatch"
+    assert ks2.tripped_at() == ks.tripped_at()
+
+    ks2.reset()
+    assert not path.exists()
+
+    ks3 = KillSwitch(tombstone_path=path)
+    assert not ks3.is_tripped()  # reset really is reset
+
+
+def test_kill_switch_without_tombstone_behaves_as_before():
+    ks = KillSwitch(max_api_error_streak=2)
+    ks.on_api_error()
+    assert not ks.is_tripped()
+    ks.on_api_error()
+    assert ks.is_tripped()
+    assert "streak" in ks.describe()
+    ks.reset()
+    assert not ks.is_tripped()
+    assert ks.tripped_at() is None
+
+
 # ------------------------------------------------------------------ gate
 def _gate():
     cfg = RiskSettings(max_open_positions=1, max_notional_pct=20.0, leverage_cap=3,
