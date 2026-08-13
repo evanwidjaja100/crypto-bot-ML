@@ -56,3 +56,14 @@ def test_proxy_zero_losses_profit_factor_inf():
     preds = np.full(len(df), 2)
     m = simulate_trading(df, preds, taker_fee=0.0001, slippage=0.0)
     assert m["profit_factor"] == np.inf
+
+
+def test_proxy_short_allwin_curve_annualized_is_nan_not_overflow():
+    import warnings
+
+    df = make_candles(5, seed=8, drift=0.02, vol=0.0005)
+    preds = np.full(len(df), 2)  # all long, all wins
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # RuntimeWarning -> error
+        m = simulate_trading(df, preds, taker_fee=0.0001, slippage=0.0)
+    assert np.isnan(m["annualized_return"])  # too short to annualize honestly

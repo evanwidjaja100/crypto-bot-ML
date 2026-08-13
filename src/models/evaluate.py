@@ -88,11 +88,18 @@ def simulate_trading(
     gross_loss = float(-losses.sum())
     profit_factor = gross_profit / gross_loss if gross_loss > 0 else np.inf
 
+    exponent = candles_per_year / len(equity)
+    final = float(equity[-1])
+    if final <= 0.0:
+        annualized = -1.0
+    elif exponent * np.log(final) > 700.0:  # float64 exp ceiling
+        annualized = float("nan")  # curve too short to annualize honestly
+    else:
+        annualized = float(final**exponent - 1.0)
+
     return {
         "total_return": float(equity[-1] - 1.0),
-        "annualized_return": float(equity[-1] ** (candles_per_year / len(equity)) - 1.0)
-        if equity[-1] > 0
-        else -1.0,
+        "annualized_return": annualized,
         "sharpe": float(
             (ret.mean() / ret.std() * np.sqrt(candles_per_year)) if ret.std() > 0 else 0.0
         ),
