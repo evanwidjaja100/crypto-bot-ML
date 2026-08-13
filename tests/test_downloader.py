@@ -89,6 +89,8 @@ def test_store_roundtrip(tmp_path):
     df = _frame(list(range(START, START + 4 * IV, IV)))
     store.write(df, "BTCUSDT", "5")
     loaded = store.load("BTCUSDT", "5")
+    df = df.copy()
+    df["network"] = "mainnet"  # write() stamps provenance
     pd.testing.assert_frame_equal(df, loaded)
     assert store.raw_path("BTCUSDT", "5").exists()
 
@@ -110,3 +112,56 @@ def test_incremental_update_rejects_invalid_data(tmp_path):
     with pytest.raises(ValueError, match="validation failed"):
         incremental_update(client, "BTCUSDT", "5", store, end_ms=START + 5 * IV)
     assert store.load("BTCUSDT", "5") is None  # cache untouched
+
+
+def test_store_is_network_keyed_in_filename_and_column(tmp_path):
+    store = CandleStore(tmp_path)
+    df = _frame(list(range(START, START + 4 * IV, IV)))
+    path = store.write(df, "BTCUSDT", "5")
+    assert path.name == "BTCUSDT_5_mainnet.parquet"
+    loaded = store.load("BTCUSDT", "5")
+    assert loaded["network"].eq("mainnet").all()
+    assert not (tmp_path / "raw" / "BTCUSDT_5.parquet").exists()
+
+
+def test_store_testnet_writes_separate_file(tmp_path):
+    main = CandleStore(tmp_path)
+    test = CandleStore(tmp_path, network="testnet")
+    df = _frame(list(range(START, START + 4 * IV, IV)))
+    main.write(df, "BTCUSDT", "5")
+    test.write(df, "BTCUSDT", "5")
+    main_df = main.load("BTCUSDT", "5")
+    test_df = test.load("BTCUSDT", "5")
+    assert main_df["network"].eq("mainnet").all()
+    assert test_df["network"].eq("testnet").all()
+
+
+def test_store_refuses_mixed_network_write(tmp_path):
+    store = CandleStore(tmp_path)
+    df = _frame(list(range(START, START + 4 * IV, IV)))
+    df.loc[1, "network"] = "testnet"
+    with pytest.raises(ValueError, match="refusing to write"):
+        store.write(df, "BTCUSDT", "5")
+
+
+def test_store_load_rejects_wrong_network_file(tmp_path):
+    store = CandleStore(tmp_path)
+    df = _frame(list(range(START, START + 4 * IV, IV)))
+    df["network"] = "testnet"
+    path = store.raw_path("BTCUSDT", "5")
+    df[["ts_ms", "open", "high", "low", "close", "volume", "turnover", "network"]].to_parquet(path, index=False)
+    with pytest.raises(ValueError, match="network"):
+        store.load("BTCUSDT", "5")
+
+
+def test_store_load_rejects_unkeyed_legacy_file(tmp_path):
+    store = CandleStore(tmp_path)
+    df = _frame(list(range(START, START + 4 * IV, IV)))  # no network column: pre-F1 file
+    df.to_parquet(store.raw_path("BTCUSDT", "5"), index=False)
+    with pytest.raises(ValueError, match="network"):
+        store.load("BTCUSDT", "5")
+
+
+def test_store_rejects_invalid_network(tmp_path):
+    with pytest.raises(ValueError, match="network"):
+        CandleStore(tmp_path, network="sidechain")
