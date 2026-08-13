@@ -23,6 +23,7 @@ from src.features.manifest import feature_set_id
 from src.features.pipeline import build_feature_frame
 from src.monitoring.logging_setup import setup_logging
 from src.models.store import latest_model
+from src.risk.exceptions import KillSwitchTripped
 from src.runner.runner import BotRunner
 
 log = logging.getLogger("run_bot")
@@ -84,7 +85,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         from src.execution.bybit_executor import BybitExecutor
 
-        executor = BybitExecutor(session, settings.symbol)
+        executor = BybitExecutor(
+            session, settings.symbol,
+            max_retries=settings.execution.max_order_retries,
+        )
         log.warning("ORDERS -> %s (mode=%s)", settings.trading_network, settings.mode)
     else:
         log.info("paper mode: local fill simulation only")
@@ -110,23 +114,30 @@ def main(argv: list[str] | None = None) -> int:
         return 3
 
     log.info("warmup: loading %d bars of history...", args.warmup_bars)
-    runner.warmup()
+    try:
+        runner.warmup()
+    except Exception as exc:  # noqa: BLE001 — a warmup failure is a startup failure
+        log.error("warmup failed: %s", exc, exc_info=True)
+        return 1
     log.info("warmup done: last candle ts=%d pending=%s",
              runner.last_ts, runner.pending.action if runner.pending else None)
 
+    consecutive_failures = 0
     try:
-        runner.tick()
-        if args.once:
-            log.info("--once: single tick done")
-            return 0
         while True:
-            sleep_s = args.sleep_secs or (runner.interval_ms / 1000.0)
-            time.sleep(sleep_s)
             try:
                 runner.tick()
-            except RuntimeError as exc:
-                log.error("run aborted: %s", exc)
+                consecutive_failures = 0
+            except KillSwitchTripped as exc:
+                log.error("HALT — kill switch: %s", exc)
                 return 3
+            except Exception as exc:  # noqa: BLE001 — transient; the streak counter decides
+                consecutive_failures += 1
+                log.warning("tick failed (%d consecutive): %s", consecutive_failures, exc,
+                            exc_info=True)
+            if args.once:
+                return 0
+            time.sleep(args.sleep_secs or (runner.interval_ms / 1000.0))
     except KeyboardInterrupt:
         log.info("interrupted; state snapshot already saved per bar")
         return 0

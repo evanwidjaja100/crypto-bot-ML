@@ -28,6 +28,7 @@ from ..data_ingestion.validation import validate_candles
 from ..execution.paper_broker import PaperBroker, PaperFill
 from ..features.pipeline import build_feature_frame
 from ..risk.gate import RiskGate
+from ..risk.exceptions import KillSwitchTripped
 from ..strategy.signal_engine import FLAT, OPEN_LONG, OPEN_SHORT, SignalDecision, decide
 
 log = logging.getLogger("runner")
@@ -70,6 +71,8 @@ class BotRunner:
             settings.backtest.initial_equity,
             tombstone_path=self.state_path.parent / "KILL_SWITCH.json",
         )
+        if executor is not None and hasattr(executor, "bind_callbacks"):
+            executor.bind_callbacks(self.gate.on_api_error, self.gate.on_api_success)
         self.broker = PaperBroker(
             initial_equity=settings.backtest.initial_equity,
             taker_fee=settings.execution.taker_fee,
@@ -184,7 +187,7 @@ class BotRunner:
             self.gate.on_api_error()
             if self.gate.kill_switch.is_tripped():
                 log.error("kill switch tripped: %s", self.gate.kill_switch.describe())
-                raise RuntimeError("kill switch tripped") from None
+                raise KillSwitchTripped("kill switch tripped") from None
             raise
 
         closed = page[page["ts_ms"] <= now - self.interval_ms]
@@ -224,14 +227,14 @@ class BotRunner:
             if not report.ok:
                 self.gate.kill_switch.trip(f"candle validation failed: {report.errors}")
                 log.error("candle validation failed: %s -> %s", report.summary(), report.errors)
-                raise RuntimeError("kill switch tripped: candle validation failed")
+                raise KillSwitchTripped("kill switch tripped: candle validation failed")
         records: list[dict] = []
         for _, bar in new_bars.iterrows():
             records += self._process_bar(bar)
         self._persist_bars(new_bars)
         if self.gate.kill_switch.is_tripped():
             log.error("kill switch tripped: %s", self.gate.kill_switch.describe())
-            raise RuntimeError("kill switch tripped")
+            raise KillSwitchTripped("kill switch tripped")
         return {"records": records, "new_bars": int(len(new_bars))}
 
     def _persist_bars(self, bars: pd.DataFrame) -> None:
@@ -370,7 +373,7 @@ class BotRunner:
                 f"order {side} {fill.qty} {fill.action} failed to reach the exchange"
             )
             log.error("ORDER FAILED to reach the exchange — kill switch tripped: %s", result)
-            raise RuntimeError("kill switch tripped: order failed to reach the exchange")
+            raise KillSwitchTripped("kill switch tripped: order failed to reach the exchange")
         if result["status"] == "already_placed":
             log.warning("order idempotently re-placed — reconciling with the exchange")
             self._reconcile_position()
@@ -383,7 +386,7 @@ class BotRunner:
             setup(self.settings.risk.leverage_cap)
         self._reconcile_position()
         if self.gate.kill_switch.is_tripped():
-            raise RuntimeError(f"kill switch tripped: {self.gate.kill_switch.describe()}")
+            raise KillSwitchTripped(f"kill switch tripped: {self.gate.kill_switch.describe()}")
 
     def _reconcile_position(self) -> None:
         """Compare the exchange position with the local ledger; trip the kill switch on mismatch."""
