@@ -101,6 +101,14 @@ def main(argv: list[str] | None = None) -> int:
         warmup_bars=args.warmup_bars,
     )
 
+    if runner.gate.kill_switch.is_tripped():
+        log.error(
+            "KILL SWITCH ACTIVE: %s (tripped %s). Investigate, then: "
+            "python scripts/reset_kill_switch.py --reason '<what you fixed>'",
+            runner.gate.kill_switch.describe(), runner.gate.kill_switch.tripped_at(),
+        )
+        return 3
+
     log.info("warmup: loading %d bars of history...", args.warmup_bars)
     runner.warmup()
     log.info("warmup done: last candle ts=%d pending=%s",
