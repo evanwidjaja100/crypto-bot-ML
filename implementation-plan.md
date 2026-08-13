@@ -1180,3 +1180,17 @@ not the code — are the real distance to live.
   total_return -11.63%, PF 0.428, 132 trades, 77 stop-loss exits. `min_promote` untouched;
   Phase 8 does the science.
 - Suite: 134 -> 145 tests.
+
+### 2026-08-13 — Phases 2–4 complete (branches `remediation/phase-2..4-*`)
+
+- Phase 2 (F2): trading network derived from mode (`testnet`->testnet, `live`->mainnet, paper/
+  backtest place no orders); `BYBIT_TESTNET` rejected loudly if still present; market data always
+  mainnet. `.env`/`.env.example` cleaned.
+- Phase 3 (F3, F4): daily-loss snapshot/restore round-trip (legacy snapshots start flat);
+  kill-switch tombstone beside the state snapshot, refusing startup while live; attributable
+  `scripts/reset_kill_switch.py` with audit log.
+- Phase 4 (F5, A1, A6): `KillSwitchTripped`; run loop survives transient tick failures and exits 3
+  on streaks; executor kill-switch callbacks wired; `execution.max_order_retries` honored.
+- Suite: 162 tests (was 133 at baseline).
+- **🚦 GATE: paper trading is meaningful again.** Verified `python scripts/run_bot.py --once`
+  against the clean mainnet cache: model + fid OK, warmup 2000 bars, pending=FLAT, exit 0.
