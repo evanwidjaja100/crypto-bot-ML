@@ -77,6 +77,11 @@ class BybitExecutor:
         if self._on_api_success:
             self._on_api_success()
 
+    def bind_callbacks(self, on_api_error, on_api_success) -> None:
+        """Wire the risk-gate callbacks (the runner calls this after construction)."""
+        self._on_api_error = on_api_error
+        self._on_api_success = on_api_success
+
     # ------------------------------------------------------------- orders
     def market_order(self, side: str, qty: float, *, reduce_only: bool = False) -> dict:
         """Place a market order idempotently. Returns {status, order_id, order_link_id}.

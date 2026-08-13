@@ -19,6 +19,7 @@ from src.config import (
     StrategySettings,
 )
 from src.data_ingestion.candle_downloader import CandleStore
+from src.execution.bybit_executor import BybitExecutor
 from src.runner.runner import BotRunner
 
 IV = 300_000
@@ -393,3 +394,34 @@ def test_reconcile_mismatch_writes_tombstone(tmp_path):
         runner.warmup()
     assert runner.gate.kill_switch.is_tripped()
     assert (tmp_path / "runner" / "KILL_SWITCH.json").exists()
+
+
+def test_executor_api_failures_reach_gate_streak_and_trip(tmp_path):
+    """A1: order-path failures must increment the runner's streak (binding works)."""
+    settings = make_settings(tmp_path)
+
+    class FailingSession:
+        def switch_position_mode(self, **kw):
+            return {"retCode": 0, "result": {}}
+
+        def set_leverage(self, **kw):
+            return {"retCode": 0, "result": {}}
+
+        def get_positions(self, **kw):
+            raise requests.exceptions.ConnectionError("down")
+
+        def place_order(self, **kw):
+            raise requests.exceptions.ConnectionError("down")
+
+        def get_order_history(self, **kw):
+            raise requests.exceptions.ConnectionError("down")
+
+    executor = BybitExecutor(FailingSession(), "BTCUSDT", max_retries=0)
+    runner = make_runner(tmp_path, settings, FakeClient(make_frame()), executor=executor)
+    runner.warmup()  # setup ok; reconcile fetch fails -> warning, not a mismatch
+    assert not runner.gate.kill_switch.is_tripped()
+
+    for _ in range(3):
+        result = executor.market_order("Buy", 0.01)
+        assert result["status"] == "failed"
+    assert runner.gate.kill_switch.is_tripped()  # streak reached the gate via the binding
