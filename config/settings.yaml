@@ -12,6 +12,10 @@ data:
   history_days: 365
   chunk_days: 30
   page_size: 1000
+  # Blocking bar-to-bar close move threshold (%). On clean mainnet BTC this is
+  # never hit; any violation means the feed is wrong. --allow-jumps is the
+  # explicit operator escape hatch in download_data.py.
+  max_bar_move_pct: 25.0
 
 features:
   # v2: ATR normalized by close (scale-free model feature); raw ATR kept for stops

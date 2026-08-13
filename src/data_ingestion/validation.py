@@ -21,6 +21,9 @@ class ValidationReport:
     first_gap_ms: int | None = None
     out_of_order: int = 0
     n_nan: int = 0
+    n_price_jumps: int = 0
+    first_jump_ms: int | None = None
+    max_bar_move_pct: float = 0.0
 
     @property
     def ok(self) -> bool:
@@ -29,7 +32,8 @@ class ValidationReport:
     def summary(self) -> str:
         return (
             f"rows={self.n_rows} dup={self.n_duplicates} gaps={self.n_gaps} "
-            f"oob={self.out_of_order} nan={self.n_nan} errors={len(self.errors)}"
+            f"oob={self.out_of_order} nan={self.n_nan} jumps={self.n_price_jumps} "
+            f"max_move={self.max_bar_move_pct:.1f}% errors={len(self.errors)}"
         )
 
 
@@ -38,8 +42,13 @@ def validate_candles(
     interval_ms: int,
     *,
     allow_gaps: bool = True,
+    max_bar_move_pct: float | None = 25.0,
 ) -> ValidationReport:
-    """Validate an OHLCV frame. Errors are blocking; gaps are warnings by default."""
+    """Validate an OHLCV frame. Errors are blocking; gaps are warnings by default.
+
+    max_bar_move_pct: blocking threshold for bar-to-bar close moves (percent).
+    None disables the jump check — an explicit operator escape hatch.
+    """
     report = ValidationReport()
     if df is None or df.empty:
         report.errors.append("empty DataFrame")
@@ -83,5 +92,17 @@ def validate_candles(
             report.first_gap_ms = int(ts.loc[big.index[0]])
             msg = f"{report.n_gaps} candle gaps (first at ts={report.first_gap_ms})"
             (report.warnings if allow_gaps else report.errors).append(msg)
+
+    if max_bar_move_pct is not None and interval_ms <= SPACING_CHECK_MAX_MS and len(d) > 1:
+        move = d["close"].pct_change().abs() * 100.0
+        report.max_bar_move_pct = float(move.max(skipna=True) or 0.0)
+        bad = move[move > max_bar_move_pct]
+        if len(bad):
+            report.n_price_jumps = len(bad)
+            report.first_jump_ms = int(ts.loc[bad.index[0]])
+            report.errors.append(
+                f"{len(bad)} bar-to-bar close moves > {max_bar_move_pct}% "
+                f"(first at ts={report.first_jump_ms}, max {report.max_bar_move_pct:.1f}%)"
+            )
 
     return report

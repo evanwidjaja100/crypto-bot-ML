@@ -77,3 +77,42 @@ def test_missing_columns_reported(candles):
 def test_empty_frame_fails():
     report = validate_candles(pd.DataFrame(), IV)
     assert not report.ok
+
+
+def _jump_frame(big_close: float) -> pd.DataFrame:
+    df = make_candles(10, seed=3)
+    df.loc[5, "close"] = big_close
+    df.loc[5, "high"] = max(df.loc[5, "high"], big_close)
+    df.loc[5, "low"] = min(df.loc[5, "low"], big_close)
+    return df
+
+
+def test_price_jump_fails_validation():
+    df = _jump_frame(400.0)  # ~300% move
+    report = validate_candles(df, IV)
+    assert not report.ok
+    assert report.n_price_jumps == 2  # into and out of the spike bar
+    assert report.first_jump_ms == int(df["ts_ms"].iloc[5])
+    assert "close moves > 25.0%" in report.errors[0]
+    assert report.max_bar_move_pct > 25.0
+
+
+def test_price_jump_passes_when_check_disabled():
+    df = _jump_frame(400.0)
+    report = validate_candles(df, IV, max_bar_move_pct=None)
+    assert report.ok
+
+
+def test_legitimate_8pct_bar_passes():
+    df = make_candles(10, seed=3)
+    df.loc[5, "close"] = df["close"].iloc[4] * 1.08
+    df.loc[5, "high"] = max(df.loc[5, "high"], df.loc[5, "close"])
+    report = validate_candles(df, IV)
+    assert report.ok
+    assert report.n_price_jumps == 0
+
+
+def test_price_jump_check_skipped_for_daily_bars():
+    df = _jump_frame(400.0)
+    report = validate_candles(df, 86_400_000)  # D interval
+    assert report.ok  # D/W/M are exempt: daily moves can legitimately be huge

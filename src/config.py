@@ -22,6 +22,7 @@ class DataSettings(BaseModel):
     history_days: int = 365
     chunk_days: int = 30
     page_size: int = 1000
+    max_bar_move_pct: float = 25.0  # blocking bar-to-bar close-move threshold; None disables
 
 
 class FeatureSettings(BaseModel):
