@@ -351,3 +351,45 @@ def test_bad_feed_trips_kill_switch_before_trading_or_persisting(tmp_path):
     assert runner.broker.direction == 0  # zero bars processed: no position
     assert len(runner.store.load("BTCUSDT", "5")) == n_stored  # nothing persisted
     assert journal_records(runner, "fill") == []
+
+
+def test_daily_loss_limit_survives_restart(tmp_path):
+    """F3: lose past the limit, restart from the snapshot, next entry rejected."""
+    settings = make_settings(tmp_path)
+    client = FakeClient(make_frame(), extra_lows=[99.5, 85.0, 99.5, 99.5, 99.5])
+    runner = make_runner(tmp_path, settings, client)
+    runner.warmup()
+    runner.tick(now_ms=runner.last_ts + 2 * IV)  # enters long
+    runner.tick(now_ms=runner.last_ts + 3 * IV)  # stop breach -> losing close, flat
+    assert runner.broker.direction == 0
+    assert runner.gate.daily_loss.day_pnl() < 0
+
+    runner.gate.daily_loss.update(-1_000.0, runner.last_ts, 9_000)  # now over the 2% limit
+    runner._save_snapshot()
+
+    # restart on the SAME store (it holds the persisted bars, incl. the two ticks)
+    runner2 = BotRunner(
+        settings=settings, client=FakeClient(make_frame()), store=runner.store,
+        model=FixedModel([0.2, 0.1, 0.7]), meta={"model_id": "t"},
+        journal_dir=tmp_path / "runner", state_path=tmp_path / "runner" / "state.json",
+        warmup_bars=200,
+    )
+    runner2.warmup()
+    assert not runner2.gate.daily_loss.allowed(runner2.last_ts)  # the loss came back
+    assert runner2.broker.state.cooldown_bars_left > 0  # stop-out cooldown also restored
+    runner2.broker.state.cooldown_bars_left = 0  # let the strategy want a fresh entry
+    runner2._decide_on_last()
+    runner2.tick(now_ms=runner2.last_ts + 2 * IV)
+    assert runner2.broker.direction == 0  # the restored limit blocks the entry
+    rejected = journal_records(runner2, "rejected")
+    assert any("daily loss" in r["reasons"] for r in rejected)
+
+
+def test_reconcile_mismatch_writes_tombstone(tmp_path):
+    settings = make_settings(tmp_path)
+    executor = FakeExecutor(position={"side": "Buy", "size": 1.0})  # exchange holds, ledger flat
+    runner = make_runner(tmp_path, settings, FakeClient(make_frame()), executor=executor)
+    with pytest.raises(RuntimeError, match="kill switch"):
+        runner.warmup()
+    assert runner.gate.kill_switch.is_tripped()
+    assert (tmp_path / "runner" / "KILL_SWITCH.json").exists()

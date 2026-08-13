@@ -65,7 +65,11 @@ class BotRunner:
         self.state_path = Path(state_path)
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
 
-        self.gate = RiskGate(settings.risk, settings.backtest.initial_equity)
+        self.gate = RiskGate(
+            settings.risk,
+            settings.backtest.initial_equity,
+            tombstone_path=self.state_path.parent / "KILL_SWITCH.json",
+        )
         self.broker = PaperBroker(
             initial_equity=settings.backtest.initial_equity,
             taker_fee=settings.execution.taker_fee,
@@ -89,7 +93,7 @@ class BotRunner:
         snap = {
             "last_ts": self.last_ts,
             "broker": self.broker.snapshot(),
-            "daily_loss_pnl": self.gate.daily_loss.day_pnl(),
+            "daily_loss": self.gate.daily_loss.snapshot(),
         }
         tmp = self.state_path.with_suffix(".tmp")
         tmp.write_text(json.dumps(snap, default=str))
@@ -100,10 +104,18 @@ class BotRunner:
             return False
         try:
             snap = json.loads(self.state_path.read_text())
+            if "daily_loss" not in snap:
+                # legacy pre-F3 snapshot: half-restoring (broker without the
+                # daily-loss state) would let a new trade open on a day that
+                # already hit its limit. Start flat instead.
+                log.warning(
+                    "state snapshot has no daily_loss record — treating it as "
+                    "untrusted and starting fresh"
+                )
+                return False
             self.broker.restore(snap["broker"])
             self.last_ts = int(snap["last_ts"])
-            if "daily_loss_pnl" in snap:
-                self.gate.daily_loss.restore_day_pnl(snap["daily_loss_pnl"])
+            self.gate.daily_loss.restore(snap["daily_loss"])
             log.info("restored state: last_ts=%d direction=%d", self.last_ts, self.broker.direction)
             return True
         except Exception as exc:  # noqa: BLE001 — a corrupt snapshot must not block startup
