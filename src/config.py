@@ -4,6 +4,7 @@ Fails fast on invalid config (bad mode, unknown interval, live without confirmat
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,14 @@ ROOT = Path(__file__).resolve().parent.parent
 
 ALLOWED_MODES = ("backtest", "paper", "testnet", "live")
 ALLOWED_INTERVALS = ("1", "3", "5", "15", "30", "60", "120", "240", "360", "720", "D", "W", "M")
+
+# Market data is public and always mainnet. Only ORDER endpoints follow the mode.
+TRADING_NETWORK_BY_MODE = {
+    "backtest": None,  # no orders
+    "paper": None,  # no orders
+    "testnet": "testnet",
+    "live": "mainnet",
+}
 
 
 class DataSettings(BaseModel):
@@ -105,7 +114,6 @@ class EnvSettings(BaseSettings):
 
     bybit_api_key: str = ""
     bybit_api_secret: str = ""
-    bybit_testnet: bool = True
     bot_mode: str = ""
     bot_live_confirm: str = ""
     data_dir: str = ""
@@ -155,6 +163,34 @@ class Settings(BaseModel):
                 f"live mode requires BOT_LIVE_CONFIRM={self.live.confirm_phrase!r} in .env"
             )
         return self
+
+    @model_validator(mode="after")
+    def _reject_legacy_network_flag(self) -> "Settings":
+        if os.getenv("BYBIT_TESTNET") is not None:
+            raise ValueError(
+                "BYBIT_TESTNET is no longer honored — the trading network is derived from mode "
+                "(testnet -> testnet, live -> mainnet) and market data is always mainnet. "
+                "Delete BYBIT_TESTNET from .env."
+            )
+        return self
+
+    @property
+    def market_data_network(self) -> str:
+        """Klines are public and keyless; they are always mainnet."""
+        return "mainnet"
+
+    @property
+    def trading_network(self) -> str | None:
+        """Which network ORDER endpoints use; None in modes that place no orders."""
+        return TRADING_NETWORK_BY_MODE[self.mode]
+
+    @property
+    def order_endpoints_testnet(self) -> bool:
+        """Value for pybit HTTP(testnet=...). Raises in modes that place no orders."""
+        net = self.trading_network
+        if net is None:
+            raise RuntimeError(f"mode={self.mode} places no orders")
+        return net == "testnet"
 
     def needs_credentials(self) -> bool:
         return self.mode in ("testnet", "live")
