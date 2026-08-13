@@ -25,6 +25,9 @@ class BybitClient:
 
     Args:
         testnet: use api-testnet.bybit.com (public data requires no keys).
+            Defaults to False: market data is always mainnet. Testnet klines
+            exist for connectivity smoke-tests only and must never reach the
+            mainnet CandleStore (the network is stamped per row).
         session: injectable pybit HTTP instance (tests use a fake).
         max_retries: retry count for transient failures (backoff, jittered).
         requests_per_second: self-imposed rate cap (Bybit allows far more for
@@ -33,7 +36,7 @@ class BybitClient:
 
     def __init__(
         self,
-        testnet: bool = True,
+        testnet: bool = False,
         session: Any | None = None,
         *,
         max_retries: int = 5,

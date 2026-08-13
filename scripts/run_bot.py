@@ -50,8 +50,8 @@ def main(argv: list[str] | None = None) -> int:
     model, meta = loaded
     log.info("model: %s (framework=%s)", meta["model_id"], meta["framework"])
 
-    client = BybitClient(testnet=settings.env.bybit_testnet)
-    store = CandleStore(settings.data.data_dir)
+    client = BybitClient(testnet=False)  # market data is public and always mainnet
+    store = CandleStore(settings.data.data_dir, network="mainnet")
 
     # refuse to run a stale model against the current feature pipeline:
     # a mismatched feature_set_id silently defeats the staleness guard
