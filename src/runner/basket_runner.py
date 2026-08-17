@@ -24,6 +24,8 @@ from ..data_ingestion.validation import validate_candles
 from ..execution.paper_broker import PaperBroker, PaperFill
 from ..features.cross_sectional import align_basket, compute_cross_sectional_features
 from ..features.pipeline import build_feature_frame
+from ..monitoring.heartbeat import Heartbeat
+from ..monitoring.notify import Notifier
 from ..risk.exceptions import KillSwitchTripped
 from ..risk.gate import RiskGate
 from ..strategy.signal_engine import (
@@ -73,6 +75,9 @@ class BasketRunner:
         self.journal_dir.mkdir(parents=True, exist_ok=True)
         self.state_path = Path(state_path)
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
+
+        self.notifier = Notifier(settings.notifications)
+        self.heartbeat = Heartbeat(settings.notifications.healthcheck_url)
 
         # Per-symbol state
         self.ctx: dict[str, pd.DataFrame] = {sym: pd.DataFrame() for sym in self.symbols}
@@ -245,6 +250,7 @@ class BasketRunner:
                 "symbol_equities": {sym: self.brokers[sym].equity() for sym in self.symbols},
             }
         )
+        self.heartbeat.ping(f"basket_equity={total_equity:.2f}")
 
         return {"records": total_records, "new_bars": new_bars_count, "total_equity": total_equity}
 
@@ -269,6 +275,10 @@ class BasketRunner:
                         "reason": fill.reason,
                     }
                 )
+                if fill.action.startswith("OPEN"):
+                    self.notifier.notify_fill(
+                        sym, fill.action, fill.price, fill.qty, fill.reason, fill.fee
+                    )
             self.pending[sym] = None
 
         # 2. Exits and funding on bar
@@ -285,6 +295,9 @@ class BasketRunner:
                     "fee": fill.fee,
                     "reason": fill.reason,
                 }
+            )
+            self.notifier.notify_exit(
+                sym, fill.action, fill.price, fill.qty, fill.reason, fill.realized_pnl
             )
             if not fill.gate_applied:
                 self.gates[sym].on_position_closed(

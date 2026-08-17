@@ -107,6 +107,14 @@ class LoggingSettings(BaseModel):
     log_level: str = "INFO"
 
 
+class NotificationSettings(BaseModel):
+    webhook_url: str = ""
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    healthcheck_url: str = ""
+    enabled: bool = True
+
+
 class LiveSettings(BaseModel):
     confirm_phrase: str = "ENABLE-LIVE"
 
@@ -123,6 +131,10 @@ class EnvSettings(BaseSettings):
     bot_strategy_confidence_long: float = 0.0
     bot_strategy_confidence_short: float = 0.0
     bot_strategy_confidence_reverse: float = 0.0
+    webhook_url: str = ""
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    healthcheck_url: str = ""
 
 
 class StrategySettings(BaseModel):
@@ -141,7 +153,7 @@ class BacktestSettings(BaseModel):
 class Settings(BaseModel):
     mode: str = "paper"
     symbol: str = "BTCUSDT"
-    interval: str = "5"
+    interval: str = "60"
     data: DataSettings = Field(default_factory=DataSettings)
     features: FeatureSettings = Field(default_factory=FeatureSettings)
     labels: LabelSettings = Field(default_factory=LabelSettings)
@@ -151,6 +163,7 @@ class Settings(BaseModel):
     risk: RiskSettings = Field(default_factory=RiskSettings)
     execution: ExecutionSettings = Field(default_factory=ExecutionSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
+    notifications: NotificationSettings = Field(default_factory=NotificationSettings)
     live: LiveSettings = Field(default_factory=LiveSettings)
     env: EnvSettings = Field(default_factory=EnvSettings)
 

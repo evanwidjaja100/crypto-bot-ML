@@ -29,6 +29,8 @@ from ..data_ingestion.intervals import INTERVAL_MS
 from ..data_ingestion.validation import validate_candles
 from ..execution.paper_broker import PaperBroker, PaperFill
 from ..features.pipeline import build_feature_frame
+from ..monitoring.heartbeat import Heartbeat
+from ..monitoring.notify import Notifier
 from ..risk.exceptions import KillSwitchTripped
 from ..risk.gate import RiskGate
 from ..strategy.signal_engine import FLAT, OPEN_LONG, OPEN_SHORT, SignalDecision, decide
@@ -67,6 +69,9 @@ class BotRunner:
         self.journal_dir.mkdir(parents=True, exist_ok=True)
         self.state_path = Path(state_path)
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
+
+        self.notifier = Notifier(settings.notifications)
+        self.heartbeat = Heartbeat(settings.notifications.healthcheck_url)
 
         self.gate = RiskGate(
             settings.risk,
@@ -316,8 +321,21 @@ class BotRunner:
             "realized_pnl": fill.realized_pnl,
         }
         self._journal(record)
-        if fill.action.startswith("CLOSE") and not fill.gate_applied:
-            self.gate.on_position_closed(fill.realized_pnl, fill.ts_ms, self.broker.equity())
+        if fill.action.startswith("OPEN"):
+            self.notifier.notify_fill(
+                self.settings.symbol, fill.action, fill.price, fill.qty, fill.reason, fill.fee
+            )
+        elif fill.action.startswith("CLOSE"):
+            self.notifier.notify_exit(
+                self.settings.symbol,
+                fill.action,
+                fill.price,
+                fill.qty,
+                fill.reason,
+                fill.realized_pnl,
+            )
+            if not fill.gate_applied:
+                self.gate.on_position_closed(fill.realized_pnl, fill.ts_ms, self.broker.equity())
         self._send_to_exchange(fill)
         return [record]
 

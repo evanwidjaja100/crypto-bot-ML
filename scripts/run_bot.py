@@ -14,6 +14,7 @@ import argparse
 import logging
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -59,7 +60,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--state-path", default="data/runner/state.json")
     args = parser.parse_args(argv)
 
-    setup_logging(settings.logging.log_level)
+    setup_logging(
+        settings.logging.log_level,
+        log_file=Path(settings.logging.log_dir) / "bot.log",
+    )
 
     client = BybitClient(testnet=False)  # market data is public and always mainnet
     store = CandleStore(settings.data.data_dir, network=settings.market_data_network)
@@ -209,12 +213,16 @@ def main(argv: list[str] | None = None) -> int:
                 consecutive_failures = 0
             except KillSwitchTripped as exc:
                 log.error("HALT — kill switch: %s", exc)
+                runner.notifier.notify_kill_switch(str(exc), datetime.now(timezone.utc).isoformat())
+                runner.heartbeat.fail(str(exc))
                 return 3
             except Exception as exc:  # noqa: BLE001 — transient; the streak counter decides
                 consecutive_failures += 1
                 log.warning(
                     "tick failed (%d consecutive): %s", consecutive_failures, exc, exc_info=True
                 )
+                if consecutive_failures == 3:
+                    runner.notifier.notify_error_streak(consecutive_failures, str(exc))
             if args.once:
                 # --once must report failure in its exit code: a clean tick
                 # returns 0, any tick failure returns 1 (5.4).
