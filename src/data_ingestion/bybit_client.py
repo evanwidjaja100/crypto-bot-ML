@@ -119,3 +119,39 @@ class BybitClient:
             df[col] = df[col].astype(float)
         df["ts_ms"] = df["ts_ms"].astype("int64")
         return df.sort_values("ts_ms").drop_duplicates(subset="ts_ms").reset_index(drop=True)
+
+    def fetch_funding_history(
+        self,
+        symbol: str,
+        *,
+        limit: int = 200,
+        start_ms: int | None = None,
+        end_ms: int | None = None,
+    ) -> pd.DataFrame:
+        """Fetch historical 8h funding settlements as a DataFrame.
+
+        Columns: ts_ms, symbol, funding_rate.
+        """
+        params: dict[str, Any] = {
+            "category": "linear",
+            "symbol": symbol,
+            "limit": limit,
+        }
+        if start_ms is not None:
+            params["startTime"] = start_ms
+        if end_ms is not None:
+            params["endTime"] = end_ms
+        resp = self._request("get_funding_rate_history", **params)
+        rows = resp.get("result", {}).get("list", [])
+        if not rows:
+            return pd.DataFrame(columns=["ts_ms", "symbol", "funding_rate"])
+        records = [
+            {
+                "ts_ms": int(r["fundingRateTimestamp"]),
+                "symbol": str(r["symbol"]),
+                "funding_rate": float(r["fundingRate"]),
+            }
+            for r in rows
+        ]
+        df = pd.DataFrame(records)
+        return df.sort_values("ts_ms").drop_duplicates(subset="ts_ms").reset_index(drop=True)
