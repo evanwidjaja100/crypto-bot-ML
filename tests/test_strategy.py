@@ -85,3 +85,53 @@ def test_atr_absent_when_feature_missing():
     d = decide(pd.Series({"ts_ms": 0}), PositionState(), STRAT, RISK, np.array([0.2, 0.2, 0.6]))
     assert d.action == OPEN_LONG
     assert d.atr_value is None
+
+
+def test_triple_barrier_decider():
+    from src.strategy.signal_engine import decide_triple_barrier
+
+    # Long win signal
+    d_long = decide_triple_barrier(row(), PositionState(), STRAT, RISK, np.array([0.1, 0.2, 0.7]))
+    assert d_long.action == OPEN_LONG
+
+    # Short win signal
+    d_short = decide_triple_barrier(row(), PositionState(), STRAT, RISK, np.array([0.7, 0.2, 0.1]))
+    assert d_short.action == OPEN_SHORT
+
+
+def test_cross_sectional_decider():
+    from src.strategy.signal_engine import decide_cross_sectional
+
+    # Leader with positive residual momentum -> OPEN_LONG
+    r_leader = pd.Series({"f_cs_rank_ret_24h": 0.95, "f_cs_residual_mom": 0.02, "close": 100.0})
+    d1 = decide_cross_sectional(r_leader, PositionState(), RISK, rank_threshold=0.90)
+    assert d1.action == OPEN_LONG
+
+    # Laggard -> FLAT
+    r_laggard = pd.Series({"f_cs_rank_ret_24h": 0.40, "f_cs_residual_mom": -0.01, "close": 100.0})
+    d2 = decide_cross_sectional(r_laggard, PositionState(), RISK, rank_threshold=0.90)
+    assert d2.action == FLAT
+
+    # In position and rank drops below 0.50 -> exit FLAT
+    state_in_pos = PositionState(direction=1, qty=1, bars_in_position=5)
+    d3 = decide_cross_sectional(r_laggard, state_in_pos, RISK, exit_rank_threshold=0.50)
+    assert d3.action == FLAT
+
+
+def test_funding_squeeze_decider():
+    from src.strategy.signal_engine import decide_funding_squeeze
+
+    # Extreme negative funding anomaly (z = -2.5) -> OPEN_LONG
+    r_neg = pd.Series({"f_funding_zscore": -2.5, "close": 100.0})
+    d1 = decide_funding_squeeze(r_neg, PositionState(), RISK, z_threshold=-2.0)
+    assert d1.action == OPEN_LONG
+
+    # Normal funding (z = 0.5) -> FLAT
+    r_norm = pd.Series({"f_funding_zscore": 0.5, "close": 100.0})
+    d2 = decide_funding_squeeze(r_norm, PositionState(), RISK, z_threshold=-2.0)
+    assert d2.action == FLAT
+
+    # In position and funding normalized (z > 0) -> exit FLAT
+    state_in_pos = PositionState(direction=1, qty=1, bars_in_position=5)
+    d3 = decide_funding_squeeze(r_norm, state_in_pos, RISK)
+    assert d3.action == FLAT

@@ -38,6 +38,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--once", action="store_true", help="run a single tick and exit")
     parser.add_argument(
+        "--strategy",
+        default="model",
+        choices=["model", "triple_barrier", "cross_sectional", "funding_squeeze", "basket"],
+        help="strategy engine to run (model, triple_barrier, cross_sectional, funding_squeeze, basket)",
+    )
+    parser.add_argument(
+        "--symbols",
+        type=lambda s: [x.strip() for x in s.split(",") if x.strip()],
+        help="comma-separated list of symbols for basket runner (e.g. BTCUSDT,ETHUSDT,SOLUSDT,DOGEUSDT)",
+    )
+    parser.add_argument(
         "--sleep-secs",
         type=float,
         default=None,
@@ -50,103 +61,145 @@ def main(argv: list[str] | None = None) -> int:
 
     setup_logging(settings.logging.log_level)
 
-    loaded = active_model("artifacts")
-    if loaded is None:
-        log.error("no trained model found; run scripts/train_model.py first")
-        return 2
-    model, meta = loaded
-    log.info("model: %s (framework=%s)", meta["model_id"], meta["framework"])
-
     client = BybitClient(testnet=False)  # market data is public and always mainnet
     store = CandleStore(settings.data.data_dir, network=settings.market_data_network)
 
-    # refuse to run a stale model against the current feature pipeline:
-    # a mismatched feature_set_id silently defeats the staleness guard
-    df = store.load(settings.symbol, settings.interval)
-    if df is None or df.empty:
-        log.error("no cached candles; run scripts/download_data.py then scripts/build_features.py")
-        return 1
-    _, feature_cols = build_feature_frame(df, settings.features)
-    current_fid = feature_set_id(
-        settings.features.version, feature_cols, settings.features.model_dump()
-    )
-    if meta["feature_set_id"] != current_fid:
-        log.error(
-            "model feature_set_id=%s does not match the current pipeline %s "
-            "(version=%s) — rebuild + retrain: build_features.py -> train_model.py",
-            meta["feature_set_id"],
-            current_fid,
-            settings.features.version,
-        )
-        return 1
-    log.info("feature_set_id OK: %s", current_fid)
+    if args.strategy in ("cross_sectional", "funding_squeeze", "basket") or args.symbols:
+        from src.data_ingestion.funding_downloader import FundingStore
+        from src.runner.basket_runner import BasketRunner
 
-    # labels are the target, not an input — a label change also invalidates a
-    # model (7.3): the feature manifest can't see it, so check it separately.
-    current_lid = label_set_id(settings.labels.model_dump())
-    if meta.get("label_set_id") != current_lid:
-        log.error(
-            "model label_set_id=%s does not match the current labels %s — "
-            "labels changed; rebuild + retrain: build_features.py -> train_model.py",
-            meta.get("label_set_id"),
-            current_lid,
-        )
-        return 1
-    log.info("label_set_id OK: %s", current_lid)
+        symbols = args.symbols or ["BTCUSDT", "ETHUSDT", "SOLUSDT", "DOGEUSDT"]
+        funding_store = FundingStore(settings.data.data_dir, network=settings.market_data_network)
 
-    executor = None
-    if settings.mode in ("testnet", "live"):
-        from pybit.unified_trading import HTTP
-
-        session = HTTP(
-            testnet=settings.order_endpoints_testnet,  # derived from mode, not env
-            api_key=settings.env.bybit_api_key,
-            api_secret=settings.env.bybit_api_secret,
-            timeout=15,
+        log.info("initializing BasketRunner (strategy=%s, symbols=%s)", args.strategy, symbols)
+        runner = BasketRunner(
+            settings=settings,
+            symbols=symbols,
+            client=client,
+            store=store,
+            funding_store=funding_store,
+            strategy_mode=args.strategy,
+            journal_dir=args.journal_dir,
+            state_path=args.state_path,
+            warmup_bars=args.warmup_bars,
         )
-        from src.execution.bybit_executor import BybitExecutor
 
-        executor = BybitExecutor(
-            session,
-            settings.symbol,
-            max_retries=settings.execution.max_order_retries,
-        )
-        log.warning("ORDERS -> %s (mode=%s)", settings.trading_network, settings.mode)
+        for sym, gate in runner.gates.items():
+            if gate.kill_switch.is_tripped():
+                log.error(
+                    "KILL SWITCH ACTIVE on %s: %s (tripped %s). Investigate, then: "
+                    "python scripts/reset_kill_switch.py --reason '<what you fixed>'",
+                    sym,
+                    gate.kill_switch.describe(),
+                    gate.kill_switch.tripped_at(),
+                )
+                return 3
+
+        log.info("warmup: loading %d bars of history across basket...", args.warmup_bars)
+        try:
+            runner.warmup()
+        except Exception as exc:  # noqa: BLE001
+            log.error("warmup failed: %s", exc, exc_info=True)
+            return 1
+        log.info("warmup done across %d symbols", len(symbols))
+
     else:
-        log.info("paper mode: local fill simulation only")
+        loaded = active_model("artifacts")
+        if loaded is None:
+            log.error("no trained model found; run scripts/train_model.py first")
+            return 2
+        model, meta = loaded
+        log.info("model: %s (framework=%s)", meta["model_id"], meta["framework"])
 
-    runner = BotRunner(
-        settings=settings,
-        client=client,
-        store=store,
-        model=model,
-        meta=meta,
-        executor=executor,
-        journal_dir=args.journal_dir,
-        state_path=args.state_path,
-        warmup_bars=args.warmup_bars,
-    )
-
-    if runner.gate.kill_switch.is_tripped():
-        log.error(
-            "KILL SWITCH ACTIVE: %s (tripped %s). Investigate, then: "
-            "python scripts/reset_kill_switch.py --reason '<what you fixed>'",
-            runner.gate.kill_switch.describe(),
-            runner.gate.kill_switch.tripped_at(),
+        # refuse to run a stale model against the current feature pipeline:
+        # a mismatched feature_set_id silently defeats the staleness guard
+        df = store.load(settings.symbol, settings.interval)
+        if df is None or df.empty:
+            log.error(
+                "no cached candles; run scripts/download_data.py then scripts/build_features.py"
+            )
+            return 1
+        _, feature_cols = build_feature_frame(df, settings.features)
+        current_fid = feature_set_id(
+            settings.features.version, feature_cols, settings.features.model_dump()
         )
-        return 3
+        if meta["feature_set_id"] != current_fid:
+            log.error(
+                "model feature_set_id=%s does not match the current pipeline %s "
+                "(version=%s) — rebuild + retrain: build_features.py -> train_model.py",
+                meta["feature_set_id"],
+                current_fid,
+                settings.features.version,
+            )
+            return 1
+        log.info("feature_set_id OK: %s", current_fid)
 
-    log.info("warmup: loading %d bars of history...", args.warmup_bars)
-    try:
-        runner.warmup()
-    except Exception as exc:  # noqa: BLE001 — a warmup failure is a startup failure
-        log.error("warmup failed: %s", exc, exc_info=True)
-        return 1
-    log.info(
-        "warmup done: last candle ts=%d pending=%s",
-        runner.last_ts,
-        runner.pending.action if runner.pending else None,
-    )
+        # labels are the target, not an input — a label change also invalidates a
+        # model (7.3): the feature manifest can't see it, so check it separately.
+        current_lid = label_set_id(settings.labels.model_dump())
+        if meta.get("label_set_id") != current_lid:
+            log.error(
+                "model label_set_id=%s does not match the current labels %s — "
+                "labels changed; rebuild + retrain: build_features.py -> train_model.py",
+                meta.get("label_set_id"),
+                current_lid,
+            )
+            return 1
+        log.info("label_set_id OK: %s", current_lid)
+
+        executor = None
+        if settings.mode in ("testnet", "live"):
+            from pybit.unified_trading import HTTP
+
+            from src.execution.bybit_executor import BybitExecutor
+
+            session = HTTP(
+                testnet=settings.order_endpoints_testnet,  # derived from mode, not env
+                api_key=settings.env.bybit_api_key,
+                api_secret=settings.env.bybit_api_secret,
+                timeout=15,
+            )
+            executor = BybitExecutor(
+                session,
+                settings.symbol,
+                max_retries=settings.execution.max_order_retries,
+            )
+            log.warning("ORDERS -> %s (mode=%s)", settings.trading_network, settings.mode)
+        else:
+            log.info("paper mode: local fill simulation only")
+
+        runner = BotRunner(
+            settings=settings,
+            client=client,
+            store=store,
+            model=model,
+            meta=meta,
+            executor=executor,
+            journal_dir=args.journal_dir,
+            state_path=args.state_path,
+            warmup_bars=args.warmup_bars,
+        )
+
+        if runner.gate.kill_switch.is_tripped():
+            log.error(
+                "KILL SWITCH ACTIVE: %s (tripped %s). Investigate, then: "
+                "python scripts/reset_kill_switch.py --reason '<what you fixed>'",
+                runner.gate.kill_switch.describe(),
+                runner.gate.kill_switch.tripped_at(),
+            )
+            return 3
+
+        log.info("warmup: loading %d bars of history...", args.warmup_bars)
+        try:
+            runner.warmup()
+        except Exception as exc:  # noqa: BLE001 — a warmup failure is a startup failure
+            log.error("warmup failed: %s", exc, exc_info=True)
+            return 1
+        log.info(
+            "warmup done: last candle ts=%d pending=%s",
+            runner.last_ts,
+            runner.pending.action if runner.pending else None,
+        )
 
     consecutive_failures = 0
     try:
