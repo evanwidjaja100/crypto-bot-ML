@@ -5,6 +5,7 @@ open to close, taker fee + slippage on every position change). It exists only
 to sanity-check models before the full event-driven backtester (Phase 7)
 exists. Do not treat it as the final backtest.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -30,8 +31,12 @@ def classification_metrics(y_true, y_pred, y_proba) -> dict[str, float]:
     metrics = {
         "accuracy": float(accuracy_score(y_true[valid], y_pred[valid])),
         "balanced_accuracy": float(balanced_accuracy_score(y_true[valid], y_pred[valid])),
-        "precision_macro": float(precision_score(y_true[valid], y_pred[valid], average="macro", zero_division=0)),
-        "recall_macro": float(recall_score(y_true[valid], y_pred[valid], average="macro", zero_division=0)),
+        "precision_macro": float(
+            precision_score(y_true[valid], y_pred[valid], average="macro", zero_division=0)
+        ),
+        "recall_macro": float(
+            recall_score(y_true[valid], y_pred[valid], average="macro", zero_division=0)
+        ),
         "f1_macro": float(f1_score(y_true[valid], y_pred[valid], average="macro", zero_division=0)),
         "log_loss": float(
             log_loss(
@@ -71,7 +76,7 @@ def simulate_trading(
     if len(df) != len(preds):
         raise ValueError("df and preds must be aligned")
 
-    r = (df["close"].to_numpy() / df["open"].to_numpy() - 1.0)
+    r = df["close"].to_numpy() / df["open"].to_numpy() - 1.0
     pos = np.zeros(len(r))
     pos[1:] = _map_preds(preds[:-1])
     turnover = np.abs(np.diff(pos, prepend=0.0))

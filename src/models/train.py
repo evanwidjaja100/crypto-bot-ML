@@ -1,10 +1,30 @@
 """Phase 6: LightGBM training with early stopping on the validation split."""
+
 from __future__ import annotations
+
+import ctypes
+import sys
+from typing import Any
 
 import lightgbm as lgb
 from lightgbm import LGBMClassifier
 
 from ..config import LgbmSettings
+
+# On 64-bit Windows, ctypes defaults undeclared arguments to 32-bit int, which
+# truncates 64-bit pointer addresses in LGBM_DatasetSetField and causes access violations.
+if sys.platform == "win32" and hasattr(lgb, "basic") and hasattr(lgb.basic, "_LIB"):
+    try:
+        lgb.basic._LIB.LGBM_DatasetSetField.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_char_p,
+            ctypes.c_void_p,
+            ctypes.c_int32,
+            ctypes.c_int32,
+        ]
+        lgb.basic._LIB.LGBM_DatasetSetField.restype = ctypes.c_int32
+    except Exception:
+        pass
 
 
 def train_lgbm(
@@ -17,7 +37,7 @@ def train_lgbm(
     seed: int = 42,
 ) -> LGBMClassifier:
     """3-class LightGBM (0=short, 1=flat, 2=long) with balanced class weights."""
-    params = {
+    params: dict[str, Any] = {
         "objective": "multiclass",
         "num_class": 3,
         "n_estimators": cfg.n_estimators,

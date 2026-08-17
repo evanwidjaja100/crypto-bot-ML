@@ -1,4 +1,5 @@
 """Phase 9: risk gate — the single approval point before any order is sent."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -26,9 +27,7 @@ class RiskGate:
         tombstone_path=None,
     ) -> None:
         self.cfg = cfg
-        self.kill_switch = KillSwitch(
-            cfg.max_api_error_streak, tombstone_path=tombstone_path
-        )
+        self.kill_switch = KillSwitch(cfg.max_api_error_streak, tombstone_path=tombstone_path)
         self.daily_loss = DailyLossTracker(cfg.max_daily_loss_pct, initial_equity)
 
     def approve_entry(
@@ -56,9 +55,7 @@ class RiskGate:
         if notional > equity * self.cfg.leverage_cap:
             reasons.append(f"notional {notional:.2f} exceeds leverage cap x{self.cfg.leverage_cap}")
         if not self.daily_loss.allowed(ts_ms):
-            reasons.append(
-                f"daily loss limit hit (pnl today {self.daily_loss.day_pnl():.2f})"
-            )
+            reasons.append(f"daily loss limit hit (pnl today {self.daily_loss.day_pnl():.2f})")
         return Approval(approved=not reasons, reasons=reasons)
 
     def on_position_closed(self, realized_pnl: float, ts_ms: int, equity: float) -> None:

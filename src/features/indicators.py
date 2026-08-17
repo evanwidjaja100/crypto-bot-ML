@@ -3,6 +3,7 @@
 Every function only combines values at or before index t. The leakage probe in
 tests/test_indicators.py enforces this property mechanically.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -53,9 +54,7 @@ def rolling_returns(close: pd.Series, periods: list[int]) -> pd.DataFrame:
 
 def rolling_volatility(close: pd.Series, periods: list[int]) -> pd.DataFrame:
     rets = close.pct_change()
-    return pd.concat(
-        {f"vol_{p}": rets.rolling(p, min_periods=p).std() for p in periods}, axis=1
-    )
+    return pd.concat({f"vol_{p}": rets.rolling(p, min_periods=p).std() for p in periods}, axis=1)
 
 
 def volume_zscore(volume: pd.Series, period: int = 20) -> pd.Series:

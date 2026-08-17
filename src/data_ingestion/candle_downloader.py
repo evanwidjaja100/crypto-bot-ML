@@ -1,4 +1,5 @@
 """Phase 3: historical + incremental candle download to Parquet."""
+
 from __future__ import annotations
 
 import logging
@@ -51,11 +52,7 @@ class CandleStore:
                 f"network mismatch: {path.name} contains {foreign} rows but "
                 f"this store serves network={self.network!r}"
             )
-        return (
-            df.sort_values("ts_ms")
-            .drop_duplicates(subset="ts_ms")
-            .reset_index(drop=True)
-        )
+        return df.sort_values("ts_ms").drop_duplicates(subset="ts_ms").reset_index(drop=True)
 
     def write(
         self,
@@ -70,9 +67,7 @@ class CandleStore:
         if "network" in df.columns:
             foreign = sorted(set(df["network"].dropna().unique()) - {self.network})
             if foreign:
-                raise ValueError(
-                    f"refusing to write {foreign} rows into the {self.network} store"
-                )
+                raise ValueError(f"refusing to write {foreign} rows into the {self.network} store")
         df["network"] = self.network
         df = (
             df.sort_values("ts_ms")
@@ -85,6 +80,23 @@ class CandleStore:
                 raise ValueError(f"refusing corrupt write: {report.summary()} -> {report.errors}")
         df[CANDLE_COLUMNS + ["network"]].to_parquet(self.raw_path(symbol, interval), index=False)
         return self.raw_path(symbol, interval)
+
+    def append(
+        self,
+        new_bars: pd.DataFrame,
+        symbol: str,
+        interval: str,
+        *,
+        validate: bool = False,
+    ) -> Path:
+        """Append new bars to the cache."""
+        if new_bars is None or new_bars.empty:
+            return self.raw_path(symbol, interval)
+        existing = self.load(symbol, interval)
+        if existing is None or existing.empty:
+            return self.write(new_bars, symbol, interval, validate=validate)
+        merged = pd.concat([existing, new_bars], ignore_index=True)
+        return self.write(merged, symbol, interval, validate=validate)
 
 
 def download_range(
@@ -103,25 +115,20 @@ def download_range(
     """
     if end_ms <= start_ms:
         raise ValueError(f"end_ms ({end_ms}) must be after start_ms ({start_ms})")
-    interval_ms = INTERVAL_MS[interval]
     chunk_ms = chunk_days * 86_400_000
 
     frames: list[pd.DataFrame] = []
     cursor = start_ms
     while cursor < end_ms:
         chunk_end = min(cursor + chunk_ms, end_ms)
-        frames.append(
-            _download_chunk(client, symbol, interval, cursor, chunk_end, page_size)
-        )
+        frames.append(_download_chunk(client, symbol, interval, cursor, chunk_end, page_size))
         cursor = chunk_end
 
     if not frames:
         return pd.DataFrame(columns=CANDLE_COLUMNS)
     out = pd.concat(frames, ignore_index=True)
     out = (
-        out.sort_values("ts_ms")
-        .drop_duplicates(subset="ts_ms", keep="last")
-        .reset_index(drop=True)
+        out.sort_values("ts_ms").drop_duplicates(subset="ts_ms", keep="last").reset_index(drop=True)
     )
     return out
 
@@ -185,8 +192,13 @@ def incremental_update(
     if existing is None or existing.empty:
         start_ms = end_ms - history_days * 86_400_000
         df = download_range(
-            client, symbol, interval, start_ms, end_ms,
-            chunk_days=chunk_days, page_size=page_size,
+            client,
+            symbol,
+            interval,
+            start_ms,
+            end_ms,
+            chunk_days=chunk_days,
+            page_size=page_size,
         )
     else:
         start_ms = int(existing["ts_ms"].iloc[-1]) + INTERVAL_MS[interval]
@@ -195,8 +207,13 @@ def incremental_update(
             df = existing
         else:
             fresh = download_range(
-                client, symbol, interval, start_ms, end_ms,
-                chunk_days=chunk_days, page_size=page_size,
+                client,
+                symbol,
+                interval,
+                start_ms,
+                end_ms,
+                chunk_days=chunk_days,
+                page_size=page_size,
             )
             df = pd.concat([existing, fresh], ignore_index=True)
             df = (
@@ -211,6 +228,9 @@ def incremental_update(
     store.write(df, symbol, interval, max_bar_move_pct=max_bar_move_pct)
     log.info(
         "store updated symbol=%s interval=%s rows=%d %s",
-        symbol, interval, len(df), report.summary(),
+        symbol,
+        interval,
+        len(df),
+        report.summary(),
     )
     return df, report

@@ -5,6 +5,7 @@ prices and hard limits are owned by the risk engine (Phase 9). Stops/targets
 are anchored to the actual fill price at execution time, so the strategy
 passes along the ATR it saw and nothing else price-sensitive.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -63,43 +64,73 @@ def decide(
             return SignalDecision(
                 FLAT,
                 [f"max_hold_bars reached ({risk_cfg.max_hold_bars})"],
-                p_long, p_short, atr_value,
+                p_long,
+                p_short,
+                atr_value,
             )
         if state.bars_in_position < risk_cfg.min_hold_bars:
             return SignalDecision(
                 HOLD,
                 [f"min_hold_bars not reached ({state.bars_in_position}/{risk_cfg.min_hold_bars})"],
-                p_long, p_short, atr_value,
+                p_long,
+                p_short,
+                atr_value,
             )
         if state.direction == 1 and p_short > strategy_cfg.confidence_reverse:
             return SignalDecision(
                 OPEN_SHORT,
                 [f"strong opposite signal (p_short={p_short:.3f})"],
-                p_long, p_short, atr_value,
+                p_long,
+                p_short,
+                atr_value,
             )
         if state.direction == -1 and p_long > strategy_cfg.confidence_reverse:
             return SignalDecision(
                 OPEN_LONG,
                 [f"strong opposite signal (p_long={p_long:.3f})"],
-                p_long, p_short, atr_value,
+                p_long,
+                p_short,
+                atr_value,
             )
-        return SignalDecision(HOLD, [f"position maintained (p_long={p_long:.3f}, p_short={p_short:.3f})"], p_long, p_short, atr_value)
+        return SignalDecision(
+            HOLD,
+            [f"position maintained (p_long={p_long:.3f}, p_short={p_short:.3f})"],
+            p_long,
+            p_short,
+            atr_value,
+        )
 
     if state.cooldown_bars_left > 0:
         return SignalDecision(
             FLAT,
             [f"cooldown active ({state.cooldown_bars_left} bars left)"],
-            p_long, p_short, atr_value,
+            p_long,
+            p_short,
+            atr_value,
         )
 
     if p_long > strategy_cfg.confidence_long and p_long > p_short:
-        return SignalDecision(OPEN_LONG, [f"p_long={p_long:.3f} > {strategy_cfg.confidence_long}"], p_long, p_short, atr_value)
+        return SignalDecision(
+            OPEN_LONG,
+            [f"p_long={p_long:.3f} > {strategy_cfg.confidence_long}"],
+            p_long,
+            p_short,
+            atr_value,
+        )
     if p_short > strategy_cfg.confidence_short and p_short > p_long:
-        return SignalDecision(OPEN_SHORT, [f"p_short={p_short:.3f} > {strategy_cfg.confidence_short}"], p_long, p_short, atr_value)
+        return SignalDecision(
+            OPEN_SHORT,
+            [f"p_short={p_short:.3f} > {strategy_cfg.confidence_short}"],
+            p_long,
+            p_short,
+            atr_value,
+        )
     return SignalDecision(
         FLAT,
         [f"no signal above confidence (p_long={p_long:.3f}, p_short={p_short:.3f})"],
-        p_long, p_short, atr_value,
+        p_long,
+        p_short,
+        atr_value,
     )
 
 

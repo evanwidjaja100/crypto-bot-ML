@@ -5,6 +5,7 @@
 data/
 logs/
 artifacts/
+!artifacts/*.md
 
 # Python
 __pycache__/

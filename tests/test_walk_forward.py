@@ -1,4 +1,5 @@
 """Walk-forward tests: chronological folds, purge enforcement, aggregation."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -26,8 +27,9 @@ def test_folds_are_chronological_and_purged():
         seen["val_first_ts"] = seen.get("val_first_ts", []) + [None]
         return y_val.to_numpy(), np.full((len(y_val), 3), 1 / 3)
 
-    result = walk_forward(X, y, n_splits=5, min_train_rows=150, purge=5,
-                          fit_and_predict=fit_and_predict, ts=ts)
+    result = walk_forward(
+        X, y, n_splits=5, min_train_rows=150, purge=5, fit_and_predict=fit_and_predict, ts=ts
+    )
     folds = result["folds"]
     assert len(folds) == 4
 
@@ -48,8 +50,9 @@ def test_aggregate_metrics_present():
     def fit_and_predict(X_train, y_train, X_val, y_val):
         return y_val.to_numpy(), np.full((len(y_val), 3), 1 / 3)
 
-    result = walk_forward(X, y, n_splits=5, min_train_rows=200, purge=3,
-                          fit_and_predict=fit_and_predict)
+    result = walk_forward(
+        X, y, n_splits=5, min_train_rows=200, purge=3, fit_and_predict=fit_and_predict
+    )
     for key in ("mean_accuracy", "mean_f1_macro", "mean_log_loss"):
         assert key in result["aggregate"]
     assert len(result["folds"]) >= 2
@@ -62,8 +65,7 @@ def test_raises_on_too_little_data():
         return y_val.to_numpy(), np.full((len(y_val), 3), 1 / 3)
 
     with pytest.raises(ValueError, match="too few rows"):
-        walk_forward(X, y, n_splits=5, min_train_rows=500, purge=5,
-                     fit_and_predict=fit_and_predict)
+        walk_forward(X, y, n_splits=5, min_train_rows=500, purge=5, fit_and_predict=fit_and_predict)
 
 
 def test_degenerate_folds_are_reported_and_warned(caplog):
@@ -75,8 +77,9 @@ def test_degenerate_folds_are_reported_and_warned(caplog):
         return y_val.to_numpy(), np.full((len(y_val), 3), 1 / 3)
 
     with caplog.at_level("WARNING"):
-        result = walk_forward(X, y, n_splits=8, min_train_rows=300, purge=0,
-                              fit_and_predict=fit_and_predict, ts=ts)
+        result = walk_forward(
+            X, y, n_splits=8, min_train_rows=300, purge=0, fit_and_predict=fit_and_predict, ts=ts
+        )
 
     assert result["expected_folds"] == 7
     assert result["n_folds_executed"] == 4  # folds 4..7 only (train_rows >= 300)

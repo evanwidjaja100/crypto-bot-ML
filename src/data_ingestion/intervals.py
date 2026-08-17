@@ -1,4 +1,5 @@
 """Bybit kline interval -> milliseconds mapping (data-only, not a config source)."""
+
 from __future__ import annotations
 
 FUNDING_INTERVAL_MS = 8 * 3_600_000

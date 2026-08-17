@@ -1,4 +1,5 @@
 """Backtester tests: fill timing, fees, stops, gaps, TP, funding, flat runs."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -12,7 +13,6 @@ from src.strategy.signal_engine import (
     HOLD,
     OPEN_LONG,
     OPEN_SHORT,
-    PositionState,
     SignalDecision,
     decide,
 )
@@ -21,9 +21,14 @@ IV = 300_000
 START = 1_700_000_000_000
 
 RISK = RiskSettings(
-    risk_per_trade_pct=0.5, leverage_cap=3, max_notional_pct=100.0,
-    stop_loss_atr_mult=2.0, take_profit_atr_mult=3.0,
-    min_hold_bars=1, max_hold_bars=60, cooldown_bars=0,
+    risk_per_trade_pct=0.5,
+    leverage_cap=3,
+    max_notional_pct=100.0,
+    stop_loss_atr_mult=2.0,
+    take_profit_atr_mult=3.0,
+    min_hold_bars=1,
+    max_hold_bars=60,
+    cooldown_bars=0,
 )
 
 
@@ -32,8 +37,12 @@ def candles(opens, highs, lows, closes, start_ms=START):
     return pd.DataFrame(
         {
             "ts_ms": start_ms + np.arange(n) * IV,
-            "open": opens, "high": highs, "low": lows, "close": closes,
-            "volume": 10.0, "turnover": 1000.0,
+            "open": opens,
+            "high": highs,
+            "low": lows,
+            "close": closes,
+            "volume": 10.0,
+            "turnover": 1000.0,
         }
     )
 
@@ -41,6 +50,7 @@ def candles(opens, highs, lows, closes, start_ms=START):
 def const_signal(action, atr=1.0):
     def fn(row, state):
         return SignalDecision(action, ["test"], atr_value=atr)
+
     return fn
 
 
@@ -50,9 +60,15 @@ def run(df, decision_fn, **kw):
     slippage_bps = kw.pop("slippage_bps", 0.0)
     funding_rate = kw.pop("funding_rate", 0.0)
     return BacktestEngine(
-        df, decision_fn, initial_equity=10_000.0, taker_fee=taker_fee,
-        slippage_bps=slippage_bps, funding_rate=funding_rate,
-        risk_cfg=risk, interval_ms=IV, **kw
+        df,
+        decision_fn,
+        initial_equity=10_000.0,
+        taker_fee=taker_fee,
+        slippage_bps=slippage_bps,
+        funding_rate=funding_rate,
+        risk_cfg=risk,
+        interval_ms=IV,
+        **kw,
     ).run()
 
 
@@ -108,8 +124,7 @@ def test_fees_and_sizing_exact():
 # -------------------------------------------------------------- stop losses
 def test_stop_loss_fills_at_stop_price():
     # bar1 low 96 breaches stop 98 -> fill at 98, exactly the risked $50
-    df = candles([100, 100, 100], [100.5, 100.5, 100.5], [99.5, 96.0, 95.0],
-                 [100, 99, 98])
+    df = candles([100, 100, 100], [100.5, 100.5, 100.5], [99.5, 96.0, 95.0], [100, 99, 98])
     result = run(df, const_signal(OPEN_LONG))
     trade = result["trades"].iloc[0]
     assert trade["exit_reason"] == "stop_loss"
@@ -132,8 +147,7 @@ def test_stop_loss_gap_fills_at_worse_open():
 # ----------------------------------------------------------- take profit
 def test_take_profit_requires_close_beyond_target():
     # target 103: bar1 wick touches 104 but closes 102 -> no fill
-    df = candles([100, 100, 100], [101, 104, 104.5], [99, 99, 99],
-                 [100, 102, 104])
+    df = candles([100, 100, 100], [101, 104, 104.5], [99, 99, 99], [100, 102, 104])
     result = run(df, const_signal(OPEN_LONG))
     # after bar1: still in position with unrealized 25*(102-100)=50
     assert result["equity"].iloc[0]["unrealized"] == pytest.approx(50.0)
@@ -195,11 +209,18 @@ def test_reverse_closes_and_reopens_same_bar():
 def test_funding_applied_on_boundary():
     # bar close ts = 08:00 UTC = funding boundary (00/08/16)
     boundary = 1_704_096_000_000  # 2024-01-01 08:00:00 UTC
-    df = candles([100] * 6, [101] * 6, [99] * 6, [100, 101, 100, 100, 100, 100],
-                 start_ms=boundary - IV)
+    df = candles(
+        [100] * 6, [101] * 6, [99] * 6, [100, 101, 100, 100, 100, 100], start_ms=boundary - IV
+    )
     result = BacktestEngine(
-        df, const_signal(OPEN_LONG), initial_equity=10_000, taker_fee=0.0,
-        slippage_bps=0, funding_rate=0.001, risk_cfg=RISK, interval_ms=IV,
+        df,
+        const_signal(OPEN_LONG),
+        initial_equity=10_000,
+        taker_fee=0.0,
+        slippage_bps=0,
+        funding_rate=0.001,
+        risk_cfg=RISK,
+        interval_ms=IV,
     ).run()
     trade = result["trades"].iloc[0]
     # funding = -direction * qty * close * rate = -25 * 101 * 0.001

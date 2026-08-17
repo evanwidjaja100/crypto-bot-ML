@@ -1,12 +1,11 @@
 """Feature pipeline tests, including the end-to-end lookahead probe."""
+
 from __future__ import annotations
 
 import pandas as pd
-import pytest
 
-from conftest import make_candles
 from src.config import FeatureSettings
-from src.features.manifest import feature_set_id
+from src.features.manifest import feature_set_id, label_set_id
 from src.features.pipeline import FEATURE_PREFIX, build_feature_frame
 
 
@@ -53,6 +52,17 @@ def test_feature_set_id_stable_and_sensitive():
     assert a != feature_set_id("v1", cols, changed)
 
 
+def test_label_set_id_sensitive_to_label_params():
+    """7.3: a label change (e.g. horizon) must change the label-set id so a
+    model trained on the old labels is invalidated."""
+    from src.config import LabelSettings
+
+    a = label_set_id(LabelSettings(horizon=2).model_dump())
+    b = label_set_id(LabelSettings(horizon=5).model_dump())
+    assert a == label_set_id(LabelSettings(horizon=2).model_dump())  # deterministic
+    assert a != b  # target changed -> id changed
+
+
 def test_time_features_present(candles, feature_settings):
     _, cols = build_feature_frame(candles, feature_settings)
     for name in ("hour_sin", "hour_cos", "dow_sin", "dow_cos"):
@@ -69,16 +79,16 @@ def test_atr_feature_scale_invariant_and_raw_kept(candles, feature_settings):
     base, _ = build_feature_frame(candles, feature_settings)
     hi, _ = build_feature_frame(scaled, feature_settings)
 
-    assert "atr_raw_14" in base.columns and "atr_raw_14" not in [c for c in base.columns if c.startswith(FEATURE_PREFIX)]
+    assert "atr_raw_14" in base.columns and "atr_raw_14" not in [
+        c for c in base.columns if c.startswith(FEATURE_PREFIX)
+    ]
     assert "f_atr_14" in base.columns
 
     merged = base[["ts_ms", "f_atr_14", "atr_raw_14"]].merge(
         hi[["ts_ms", "f_atr_14", "atr_raw_14"]], on="ts_ms", suffixes=("_a", "_b")
     )
     # normalized feature identical under pure price scaling
-    pd.testing.assert_series_equal(
-        merged["f_atr_14_a"], merged["f_atr_14_b"], check_names=False
-    )
+    pd.testing.assert_series_equal(merged["f_atr_14_a"], merged["f_atr_14_b"], check_names=False)
     # raw ATR scales with the price level (stays in price units)
     pd.testing.assert_series_equal(
         merged["atr_raw_14_b"], merged["atr_raw_14_a"] * 100.0, check_names=False

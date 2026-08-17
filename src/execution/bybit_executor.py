@@ -11,6 +11,7 @@ order can fill while we are unsure of its state). Contract:
     that ultimately fails, on_api_success once per successful operation.
     The runner wires these to the RiskGate.
 """
+
 from __future__ import annotations
 
 import math
@@ -112,7 +113,9 @@ class BybitExecutor:
                 # state unknown -> check whether the exchange saw the order
                 try:
                     hist = self._request(
-                        "get_order_history", category="linear", symbol=self.symbol,
+                        "get_order_history",
+                        category="linear",
+                        symbol=self.symbol,
                         orderLinkId=link_id,
                     )
                 except RuntimeError:
@@ -130,7 +133,10 @@ class BybitExecutor:
     def get_position(self) -> dict | None:
         """Current linear position for the symbol, or None if flat."""
         resp = self._request(
-            "get_positions", category="linear", symbol=self.symbol, settleCoin="USDT",
+            "get_positions",
+            category="linear",
+            symbol=self.symbol,
+            settleCoin="USDT",
         )
         rows = resp.get("result", {}).get("list", [])
         for row in rows:
@@ -189,6 +195,9 @@ class BybitExecutor:
         except RuntimeError:
             pass  # already one-way: bybit rejects the no-op switch; not fatal
         self._request(
-            "set_leverage", category="linear", symbol=self.symbol,
-            buyLeverage=str(leverage), sellLeverage=str(leverage),
+            "set_leverage",
+            category="linear",
+            symbol=self.symbol,
+            buyLeverage=str(leverage),
+            sellLeverage=str(leverage),
         )

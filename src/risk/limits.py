@@ -1,4 +1,5 @@
 """Phase 9: hard limits — kill switch, daily loss tracker, API error streak."""
+
 from __future__ import annotations
 
 import json
@@ -29,7 +30,7 @@ class KillSwitch:
         self._tripped_at: str | None = None
         self._tombstone = Path(tombstone_path) if tombstone_path else None
         if self._tombstone is not None and self._tombstone.exists():
-            data = json.loads(self._tombstone.read_text())
+            data = json.loads(self._tombstone.read_text(encoding="utf-8"))
             self._tripped, self._reason = True, data.get("reason", "unknown")
             self._tripped_at = data.get("tripped_at")
 
@@ -73,10 +74,8 @@ class KillSwitch:
         self._tombstone.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=self._tombstone.parent, suffix=".tmp")
         try:
-            with os.fdopen(fd, "w") as fh:
-                json.dump(
-                    {"reason": self._reason, "tripped_at": self._tripped_at}, fh
-                )
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump({"reason": self._reason, "tripped_at": self._tripped_at}, fh)
             os.replace(tmp, self._tombstone)
         except Exception:
             os.unlink(tmp)
@@ -89,7 +88,9 @@ class DailyLossTracker:
     def __init__(self, max_daily_loss_pct: float, initial_equity: float) -> None:
         self._max_pct = max_daily_loss_pct
         self._initial_equity = initial_equity
-        self.reset()
+        self._day: str | None = None
+        self._pnl = 0.0
+        self._equity_base = initial_equity
 
     @staticmethod
     def _key(ts_ms: int) -> str:

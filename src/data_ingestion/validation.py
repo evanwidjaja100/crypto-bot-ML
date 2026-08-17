@@ -1,4 +1,5 @@
 """Phase 3: candle data validation (no silent corruption in the cache)."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

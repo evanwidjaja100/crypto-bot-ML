@@ -9,6 +9,7 @@ Indicator columns are added to the candle frame by add_trend_columns() and
 ride along through BacktestEngine untouched. Every signal uses only past data
 (lagged extremes / past closes), so there is no lookahead.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -27,10 +28,9 @@ ATR = "trend_atr_14"
 TREND_COLUMNS = [EMA_FAST, EMA_SLOW, DON_HI, DON_LO, MOM, ATR]
 
 
-def add_trend_columns(df: pd.DataFrame, *,
-                      donchian: int = 20,
-                      momentum: int = 20,
-                      atr_period: int = 14) -> pd.DataFrame:
+def add_trend_columns(
+    df: pd.DataFrame, *, donchian: int = 20, momentum: int = 20, atr_period: int = 14
+) -> pd.DataFrame:
     """Add lagged trend indicator columns. Assumes forward-unshifted candles."""
     from ..features import indicators as ind
 
@@ -70,15 +70,23 @@ def decide_donchian(row: pd.Series, state: PositionState) -> SignalDecision:
 
     if state.direction == 0:
         if close > hi:
-            return SignalDecision(OPEN_LONG, [f"close {close:.2f} > channel high {hi:.2f}"], atr_value=atr)
+            return SignalDecision(
+                OPEN_LONG, [f"close {close:.2f} > channel high {hi:.2f}"], atr_value=atr
+            )
         if close < lo:
-            return SignalDecision(OPEN_SHORT, [f"close {close:.2f} < channel low {lo:.2f}"], atr_value=atr)
+            return SignalDecision(
+                OPEN_SHORT, [f"close {close:.2f} < channel low {lo:.2f}"], atr_value=atr
+            )
         return SignalDecision(FLAT, ["inside channel"], atr_value=atr)
 
     if state.direction == 1 and close < lo:
-        return SignalDecision(OPEN_SHORT, [f"long exit: close {close:.2f} < channel low {lo:.2f}"], atr_value=atr)
+        return SignalDecision(
+            OPEN_SHORT, [f"long exit: close {close:.2f} < channel low {lo:.2f}"], atr_value=atr
+        )
     if state.direction == -1 and close > hi:
-        return SignalDecision(OPEN_LONG, [f"short exit: close {close:.2f} > channel high {hi:.2f}"], atr_value=atr)
+        return SignalDecision(
+            OPEN_LONG, [f"short exit: close {close:.2f} > channel high {hi:.2f}"], atr_value=atr
+        )
     return SignalDecision(HOLD, ["trend intact"], atr_value=atr)
 
 

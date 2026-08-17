@@ -1,10 +1,10 @@
 """Data validation tests: duplicates, gaps, ordering, price bounds."""
+
 from __future__ import annotations
 
 import pandas as pd
-import pytest
-
 from conftest import make_candles
+
 from src.data_ingestion.validation import validate_candles
 
 IV = 300_000

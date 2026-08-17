@@ -3,6 +3,7 @@
 Trading (signed) endpoints live in src/execution/bybit_executor.py (Phase 10).
 This module never touches API keys.
 """
+
 from __future__ import annotations
 
 import random

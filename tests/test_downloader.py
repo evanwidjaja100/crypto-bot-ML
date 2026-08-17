@@ -1,4 +1,5 @@
 """Downloader tests: pagination, chunking, incremental merge, store round-trip."""
+
 from __future__ import annotations
 
 import pandas as pd
@@ -59,8 +60,13 @@ def test_download_range_chunks_over_long_spans(tmp_path):
     ts = [START + k * 3_600_000 for k in range(40)]
     client = FakeClient(ts, page=5)
     df = download_range(
-        client, "BTCUSDT", "60", START, ts[-1] + 3_600_000,
-        chunk_days=1, page_size=5,
+        client,
+        "BTCUSDT",
+        "60",
+        START,
+        ts[-1] + 3_600_000,
+        chunk_days=1,
+        page_size=5,
     )
     assert len(df) == 40
     assert client.calls >= 8  # 2 chunks, 4 pages each
@@ -68,7 +74,6 @@ def test_download_range_chunks_over_long_spans(tmp_path):
 
 def test_incremental_update_merges_without_duplicates(tmp_path):
     store = CandleStore(tmp_path)
-    ts_first = list(range(START, START + 6 * IV, IV))
     client = FakeClient(list(range(START, START + 10 * IV, IV)))
 
     df1, r1 = incremental_update(client, "BTCUSDT", "5", store, end_ms=START + 6 * IV)
@@ -149,7 +154,9 @@ def test_store_load_rejects_wrong_network_file(tmp_path):
     df = _frame(list(range(START, START + 4 * IV, IV)))
     df["network"] = "testnet"
     path = store.raw_path("BTCUSDT", "5")
-    df[["ts_ms", "open", "high", "low", "close", "volume", "turnover", "network"]].to_parquet(path, index=False)
+    df[["ts_ms", "open", "high", "low", "close", "volume", "turnover", "network"]].to_parquet(
+        path, index=False
+    )
     with pytest.raises(ValueError, match="network"):
         store.load("BTCUSDT", "5")
 

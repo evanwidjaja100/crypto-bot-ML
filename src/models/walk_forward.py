@@ -4,6 +4,7 @@ Purge: the last `purge` rows of each train window are dropped because their
 labels embed price data from beyond the train boundary (the label horizon),
 which would otherwise leak into the validation fold.
 """
+
 from __future__ import annotations
 
 import logging
@@ -58,7 +59,7 @@ def walk_forward(
         X_val, y_val = X.iloc[val_start:val_end], y.iloc[val_start:val_end]
         pred, proba = fit_and_predict(X_train, y_train, X_val, y_val)
 
-        fold = {
+        fold: dict[str, float] = {
             "fold": i,
             "train_rows": train_end,
             "val_rows": val_end - val_start,
@@ -76,7 +77,8 @@ def walk_forward(
     if len(folds) < expected:
         log.warning(
             "walk-forward ran only %d/%d folds — increase data or lower min_train_rows",
-            len(folds), expected,
+            len(folds),
+            expected,
         )
 
     agg = {

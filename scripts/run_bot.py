@@ -7,22 +7,24 @@ Paper mode simulates fills locally (no credentials needed). Testnet/live
 require BYBIT_API_KEY / BYBIT_API_SECRET in .env and mirror every fill to the
 exchange. Exit codes: 0 ok, 1 init/config error, 2 no model, 3 kill switch.
 """
+
 from __future__ import annotations
 
 import argparse
 import logging
 import sys
 import time
+from pathlib import Path
 
-sys.path.insert(0, __file__.rsplit("/", 2)[0])
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import load_settings
 from src.data_ingestion.bybit_client import BybitClient
 from src.data_ingestion.candle_downloader import CandleStore
-from src.features.manifest import feature_set_id
+from src.features.manifest import feature_set_id, label_set_id
 from src.features.pipeline import build_feature_frame
+from src.models.store import active_model
 from src.monitoring.logging_setup import setup_logging
-from src.models.store import latest_model
 from src.risk.exceptions import KillSwitchTripped
 from src.runner.runner import BotRunner
 
@@ -35,8 +37,12 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--once", action="store_true", help="run a single tick and exit")
-    parser.add_argument("--sleep-secs", type=float, default=None,
-                        help="poll interval; defaults to the candle interval")
+    parser.add_argument(
+        "--sleep-secs",
+        type=float,
+        default=None,
+        help="poll interval; defaults to the candle interval",
+    )
     parser.add_argument("--warmup-bars", type=int, default=2000)
     parser.add_argument("--journal-dir", default="data/runner")
     parser.add_argument("--state-path", default="data/runner/state.json")
@@ -44,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
 
     setup_logging(settings.logging.log_level)
 
-    loaded = latest_model("artifacts")
+    loaded = active_model("artifacts")
     if loaded is None:
         log.error("no trained model found; run scripts/train_model.py first")
         return 2
@@ -68,10 +74,25 @@ def main(argv: list[str] | None = None) -> int:
         log.error(
             "model feature_set_id=%s does not match the current pipeline %s "
             "(version=%s) — rebuild + retrain: build_features.py -> train_model.py",
-            meta["feature_set_id"], current_fid, settings.features.version,
+            meta["feature_set_id"],
+            current_fid,
+            settings.features.version,
         )
         return 1
     log.info("feature_set_id OK: %s", current_fid)
+
+    # labels are the target, not an input — a label change also invalidates a
+    # model (7.3): the feature manifest can't see it, so check it separately.
+    current_lid = label_set_id(settings.labels.model_dump())
+    if meta.get("label_set_id") != current_lid:
+        log.error(
+            "model label_set_id=%s does not match the current labels %s — "
+            "labels changed; rebuild + retrain: build_features.py -> train_model.py",
+            meta.get("label_set_id"),
+            current_lid,
+        )
+        return 1
+    log.info("label_set_id OK: %s", current_lid)
 
     executor = None
     if settings.mode in ("testnet", "live"):
@@ -86,7 +107,8 @@ def main(argv: list[str] | None = None) -> int:
         from src.execution.bybit_executor import BybitExecutor
 
         executor = BybitExecutor(
-            session, settings.symbol,
+            session,
+            settings.symbol,
             max_retries=settings.execution.max_order_retries,
         )
         log.warning("ORDERS -> %s (mode=%s)", settings.trading_network, settings.mode)
@@ -109,7 +131,8 @@ def main(argv: list[str] | None = None) -> int:
         log.error(
             "KILL SWITCH ACTIVE: %s (tripped %s). Investigate, then: "
             "python scripts/reset_kill_switch.py --reason '<what you fixed>'",
-            runner.gate.kill_switch.describe(), runner.gate.kill_switch.tripped_at(),
+            runner.gate.kill_switch.describe(),
+            runner.gate.kill_switch.tripped_at(),
         )
         return 3
 
@@ -119,8 +142,11 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:  # noqa: BLE001 — a warmup failure is a startup failure
         log.error("warmup failed: %s", exc, exc_info=True)
         return 1
-    log.info("warmup done: last candle ts=%d pending=%s",
-             runner.last_ts, runner.pending.action if runner.pending else None)
+    log.info(
+        "warmup done: last candle ts=%d pending=%s",
+        runner.last_ts,
+        runner.pending.action if runner.pending else None,
+    )
 
     consecutive_failures = 0
     try:
@@ -133,10 +159,13 @@ def main(argv: list[str] | None = None) -> int:
                 return 3
             except Exception as exc:  # noqa: BLE001 — transient; the streak counter decides
                 consecutive_failures += 1
-                log.warning("tick failed (%d consecutive): %s", consecutive_failures, exc,
-                            exc_info=True)
+                log.warning(
+                    "tick failed (%d consecutive): %s", consecutive_failures, exc, exc_info=True
+                )
             if args.once:
-                return 0
+                # --once must report failure in its exit code: a clean tick
+                # returns 0, any tick failure returns 1 (5.4).
+                return 0 if consecutive_failures == 0 else 1
             time.sleep(args.sleep_secs or (runner.interval_ms / 1000.0))
     except KeyboardInterrupt:
         log.info("interrupted; state snapshot already saved per bar")

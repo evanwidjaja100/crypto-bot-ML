@@ -3,6 +3,7 @@
 Class mapping (fixed across the project):
     0 = short, 1 = flat, 2 = long
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -31,9 +32,11 @@ def add_labels(df: pd.DataFrame, cfg: LabelSettings) -> pd.DataFrame:
     close = out["close"]
 
     fwd_return = close.pct_change(cfg.horizon).shift(-cfg.horizon)
-    vol = fwd_return.rolling(
-        cfg.threshold_window, min_periods=cfg.threshold_window // 2
-    ).std()
+    # Threshold from TRAILING realized volatility — fully observable at t (F12).
+    # The old rolling std of fwd_return let fwd_return[t] help set its own
+    # boundary, making labels self-referential and irreproducible at inference.
+    past_return = close.pct_change(cfg.horizon)
+    vol = past_return.rolling(cfg.threshold_window, min_periods=cfg.threshold_window // 2).std()
     thr = (cfg.threshold_sigma * vol).clip(lower=cfg.min_abs_threshold)
 
     label = pd.Series(CLASS_FLAT, index=out.index, dtype="float64")

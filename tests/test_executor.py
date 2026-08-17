@@ -1,10 +1,10 @@
 """BybitExecutor tests against a fake signed session: idempotent placement,
 retry semantics, kill-switch callbacks, position/balance parsing."""
+
 from __future__ import annotations
 
-import requests
-
 import pytest
+import requests
 
 import src.execution.bybit_executor as ex_mod
 from src.execution.bybit_executor import BybitExecutor
@@ -48,9 +48,20 @@ class FakeSession:
 
     def get_instruments_info(self, **kw):
         self._count("get_instruments_info")
-        return {"retCode": 0, "result": {"list": [{
-            "lotSizeFilter": {"qtyStep": "0.1", "minOrderQty": "1", "minNotionalValue": "5"},
-        }]}}
+        return {
+            "retCode": 0,
+            "result": {
+                "list": [
+                    {
+                        "lotSizeFilter": {
+                            "qtyStep": "0.1",
+                            "minOrderQty": "1",
+                            "minNotionalValue": "5",
+                        },
+                    }
+                ]
+            },
+        }
 
     def switch_position_mode(self, **kw):
         self._count("switch_position_mode")
@@ -143,8 +154,15 @@ def test_get_position_parsing():
     session = FakeSession()
     ex = make(session)
     assert ex.get_position() is None
-    session.positions = [{"symbol": "BTCUSDT", "side": "Sell", "size": "0.5",
-                          "avgPrice": "100.5", "unrealisedPnl": "2.25"}]
+    session.positions = [
+        {
+            "symbol": "BTCUSDT",
+            "side": "Sell",
+            "size": "0.5",
+            "avgPrice": "100.5",
+            "unrealisedPnl": "2.25",
+        }
+    ]
     pos = ex.get_position()
     assert pos["side"] == "Sell"
     assert pos["size"] == 0.5

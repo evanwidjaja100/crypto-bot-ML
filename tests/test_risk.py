@@ -1,4 +1,5 @@
 """Risk engine tests: sizing math, caps, stops, kill switch, daily loss, gate."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -13,35 +14,40 @@ from src.risk.sizing import compute_stops, size_position
 # ---------------------------------------------------------------- sizing
 def test_size_risk_budget():
     # 0.5% of 10k = $50 risk; entry 100, stop 99 -> $1/share -> 50 BTC
-    qty, info = size_position(10_000, 100.0, 99.0, risk_per_trade_pct=0.5,
-                              leverage_cap=3, max_notional_pct=100.0)
+    qty, info = size_position(
+        10_000, 100.0, 99.0, risk_per_trade_pct=0.5, leverage_cap=3, max_notional_pct=100.0
+    )
     assert qty == pytest.approx(50.0)
     assert info["notional"] == pytest.approx(5000.0)
     assert info["effective_risk_pct"] == pytest.approx(0.5)
 
 
 def test_size_leverage_cap():
-    qty, info = size_position(10_000, 100.0, 99.0, risk_per_trade_pct=5.0,
-                              leverage_cap=3, max_notional_pct=1000.0)
+    qty, info = size_position(
+        10_000, 100.0, 99.0, risk_per_trade_pct=5.0, leverage_cap=3, max_notional_pct=1000.0
+    )
     assert qty == pytest.approx(300.0)  # capped at 3x leverage
     assert info["effective_risk_pct"] == pytest.approx(3.0)
 
 
 def test_size_notional_cap():
-    qty, _ = size_position(10_000, 100.0, 99.0, risk_per_trade_pct=5.0,
-                           leverage_cap=10, max_notional_pct=20.0)
+    qty, _ = size_position(
+        10_000, 100.0, 99.0, risk_per_trade_pct=5.0, leverage_cap=10, max_notional_pct=20.0
+    )
     assert qty == pytest.approx(20.0)  # 20% of equity
 
 
 def test_size_zero_risk_raises():
     with pytest.raises(ValueError, match="zero risk budget"):
-        size_position(10_000, 100.0, 100.0, risk_per_trade_pct=0.5,
-                      leverage_cap=3, max_notional_pct=20.0)
+        size_position(
+            10_000, 100.0, 100.0, risk_per_trade_pct=0.5, leverage_cap=3, max_notional_pct=20.0
+        )
 
 
 def test_size_without_stop_uses_caps():
-    qty, info = size_position(10_000, 100.0, None, risk_per_trade_pct=0.5,
-                              leverage_cap=3, max_notional_pct=20.0)
+    qty, info = size_position(
+        10_000, 100.0, None, risk_per_trade_pct=0.5, leverage_cap=3, max_notional_pct=20.0
+    )
     assert qty == pytest.approx(20.0)  # min(leverage 300, notional 20)
     assert np.isnan(info["price_risk"])
 
@@ -75,9 +81,11 @@ def test_kill_switch_trips_after_streak():
 
 def test_kill_switch_reset_by_success_and_operator():
     ks = KillSwitch(max_api_error_streak=3)
-    ks.on_api_error(); ks.on_api_error()
+    ks.on_api_error()
+    ks.on_api_error()
     ks.on_api_success()  # resets streak
-    ks.on_api_error(); ks.on_api_error()
+    ks.on_api_error()
+    ks.on_api_error()
     assert not ks.is_tripped()
     ks.trip("manual")
     assert ks.is_tripped()
@@ -167,67 +175,125 @@ def test_kill_switch_without_tombstone_behaves_as_before():
 
 # ------------------------------------------------------------------ gate
 def _gate():
-    cfg = RiskSettings(max_open_positions=1, max_notional_pct=20.0, leverage_cap=3,
-                       max_daily_loss_pct=2.0, max_api_error_streak=5)
+    cfg = RiskSettings(
+        max_open_positions=1,
+        max_notional_pct=20.0,
+        leverage_cap=3,
+        max_daily_loss_pct=2.0,
+        max_api_error_streak=5,
+    )
     return RiskGate(cfg, initial_equity=10_000)
 
 
 def test_gate_approves_clean_entry():
     gate = _gate()
-    approval = gate.approve_entry(direction=1, qty=10, entry_price=100,
-                                  equity=10_000, open_positions=0, ts_ms=1_700_000_000_000)
+    approval = gate.approve_entry(
+        direction=1,
+        qty=10,
+        entry_price=100,
+        equity=10_000,
+        open_positions=0,
+        ts_ms=1_700_000_000_000,
+    )
     assert approval.approved
     assert approval.reasons == []
 
 
 def test_gate_rejects_over_max_positions():
     gate = _gate()
-    approval = gate.approve_entry(direction=1, qty=10, entry_price=100,
-                                  equity=10_000, open_positions=1, ts_ms=1_700_000_000_000)
+    approval = gate.approve_entry(
+        direction=1,
+        qty=10,
+        entry_price=100,
+        equity=10_000,
+        open_positions=1,
+        ts_ms=1_700_000_000_000,
+    )
     assert not approval.approved
     assert any("max open positions" in r for r in approval.reasons)
 
 
 def test_gate_rejects_over_notional():
     gate = _gate()
-    approval = gate.approve_entry(direction=1, qty=100, entry_price=100,  # notional 10k = 100% equity
-                                  equity=10_000, open_positions=0, ts_ms=1_700_000_000_000)
+    approval = gate.approve_entry(
+        direction=1,
+        qty=100,
+        entry_price=100,  # notional 10k = 100% equity
+        equity=10_000,
+        open_positions=0,
+        ts_ms=1_700_000_000_000,
+    )
     assert not approval.approved
     assert any("notional" in r for r in approval.reasons)
 
 
 def test_gate_rejects_over_leverage():
     gate = RiskGate(
-        RiskSettings(max_open_positions=1, max_notional_pct=1000.0, leverage_cap=3,
-                     max_daily_loss_pct=2.0, max_api_error_streak=5),
+        RiskSettings(
+            max_open_positions=1,
+            max_notional_pct=1000.0,
+            leverage_cap=3,
+            max_daily_loss_pct=2.0,
+            max_api_error_streak=5,
+        ),
         initial_equity=10_000,
     )
-    approval = gate.approve_entry(direction=1, qty=10, entry_price=100,  # notional 1k, ok
-                                  equity=10_000, open_positions=0, ts_ms=1_700_000_000_000)
+    approval = gate.approve_entry(
+        direction=1,
+        qty=10,
+        entry_price=100,  # notional 1k, ok
+        equity=10_000,
+        open_positions=0,
+        ts_ms=1_700_000_000_000,
+    )
     assert approval.approved
-    approval = gate.approve_entry(direction=1, qty=400, entry_price=100,  # notional 40k = 4x
-                                  equity=10_000, open_positions=0, ts_ms=1_700_000_000_000)
+    approval = gate.approve_entry(
+        direction=1,
+        qty=400,
+        entry_price=100,  # notional 40k = 4x
+        equity=10_000,
+        open_positions=0,
+        ts_ms=1_700_000_000_000,
+    )
     assert not approval.approved
     assert any("leverage" in r for r in approval.reasons)
 
 
 def test_gate_rejects_zero_qty():
     gate = _gate()
-    approval = gate.approve_entry(direction=1, qty=0.0, entry_price=100,
-                                  equity=10_000, open_positions=0, ts_ms=1_700_000_000_000)
+    approval = gate.approve_entry(
+        direction=1,
+        qty=0.0,
+        entry_price=100,
+        equity=10_000,
+        open_positions=0,
+        ts_ms=1_700_000_000_000,
+    )
     assert not approval.approved
 
 
 def test_gate_rejects_on_kill_switch():
     gate = _gate()
     gate.on_api_error()
-    approval = gate.approve_entry(direction=1, qty=10, entry_price=100,
-                                  equity=10_000, open_positions=0, ts_ms=1_700_000_000_000)
+    approval = gate.approve_entry(
+        direction=1,
+        qty=10,
+        entry_price=100,
+        equity=10_000,
+        open_positions=0,
+        ts_ms=1_700_000_000_000,
+    )
     assert approval.approved  # 1 error is below the streak threshold
     for _ in range(4):
         gate.on_api_error()
-    approval = gate.approve_entry(direction=1, qty=10, entry_price=100,
-                                  equity=10_000, open_positions=0, ts_ms=1_700_000_000_000)
+    approval = gate.approve_entry(
+        direction=1,
+        qty=10,
+        entry_price=100,
+        equity=10_000,
+        open_positions=0,
+        ts_ms=1_700_000_000_000,
+    )
     assert not approval.approved
     assert any("kill switch" in r for r in approval.reasons)
 
@@ -236,7 +302,8 @@ def test_gate_rejects_on_daily_loss():
     gate = _gate()
     ts = 1_700_000_000_000
     gate.on_position_closed(-250.0, ts, 9_750)  # over the 2% daily limit
-    approval = gate.approve_entry(direction=1, qty=10, entry_price=100,
-                                  equity=9_750, open_positions=0, ts_ms=ts)
+    approval = gate.approve_entry(
+        direction=1, qty=10, entry_price=100, equity=9_750, open_positions=0, ts_ms=ts
+    )
     assert not approval.approved
     assert any("daily loss" in r for r in approval.reasons)

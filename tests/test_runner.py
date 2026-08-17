@@ -1,5 +1,6 @@
 """BotRunner tests: warmup, decision->next-open execution, stops, gate
 rejections, snapshot restore, kill switch, exchange mirroring."""
+
 from __future__ import annotations
 
 import json
@@ -28,10 +29,7 @@ N = 260  # more than warmup_bars=200
 
 
 def make_frame():
-    rows = [
-        [START + i * IV, 100.0, 100.5, 99.5, 100.0, 10.0, 1000.0]
-        for i in range(N)
-    ]
+    rows = [[START + i * IV, 100.0, 100.5, 99.5, 100.0, 10.0, 1000.0] for i in range(N)]
     return pd.DataFrame(
         rows, columns=["ts_ms", "open", "high", "low", "close", "volume", "turnover"]
     )
@@ -108,12 +106,18 @@ class FakeExecutor:
 def make_settings(tmp_path, **risk_kw):
     risk_kw.setdefault("max_notional_pct", 100.0)
     risk = RiskSettings(
-        risk_per_trade_pct=0.5, max_notional_pct=100.0,
-        stop_loss_atr_mult=2.0, take_profit_atr_mult=3.0,
-        min_hold_bars=1, max_hold_bars=60, cooldown_bars=5,
+        risk_per_trade_pct=0.5,
+        max_notional_pct=100.0,
+        stop_loss_atr_mult=2.0,
+        take_profit_atr_mult=3.0,
+        min_hold_bars=1,
+        max_hold_bars=60,
+        cooldown_bars=5,
     ).model_copy(update=risk_kw)
     return Settings(
-        mode="paper", symbol="BTCUSDT", interval="5",
+        mode="paper",
+        symbol="BTCUSDT",
+        interval="5",
         data=DataSettings(data_dir=str(tmp_path)),
         strategy=StrategySettings(),
         risk=risk,
@@ -130,16 +134,20 @@ def make_runner(tmp_path, settings, client, executor=None, **kw):
     kw.setdefault("journal_dir", tmp_path / "runner")
     kw.setdefault("state_path", tmp_path / "runner" / "state.json")
     return BotRunner(
-        settings=settings, client=client, store=store,
-        model=FixedModel([0.2, 0.1, 0.7]), meta={"model_id": "t"},
-        executor=executor, **kw,
+        settings=settings,
+        client=client,
+        store=store,
+        model=FixedModel([0.2, 0.1, 0.7]),
+        meta={"model_id": "t"},
+        executor=executor,
+        **kw,
     )
 
 
 def journal_records(runner, type_=None):
     files = list(runner.journal_dir.glob("journal_*.jsonl"))
     assert files, "no journal file written"
-    recs = [json.loads(l) for f in files for l in f.read_text().splitlines()]
+    recs = [json.loads(line) for f in files for line in f.read_text().splitlines()]
     return [r for r in recs if r["type"] == type_] if type_ else recs
 
 
@@ -246,8 +254,10 @@ class GapClient:
     def __init__(self):
         base = make_frame()
         cols = ["ts_ms", "open", "high", "low", "close", "volume", "turnover"]
-        extras = [[int(base["ts_ms"].iloc[-1]) + (i + 1) * IV, 100.0, 100.5, 99.5, 100.0, 10.0, 1000.0]
-                  for i in range(12)]
+        extras = [
+            [int(base["ts_ms"].iloc[-1]) + (i + 1) * IV, 100.0, 100.5, 99.5, 100.0, 10.0, 1000.0]
+            for i in range(12)
+        ]
         self.base = base
         self.full = pd.concat([base, pd.DataFrame(extras, columns=cols)], ignore_index=True)
         self.now_ms = int(base["ts_ms"].iloc[-1])  # cache end == server time during warmup
@@ -370,9 +380,13 @@ def test_daily_loss_limit_survives_restart(tmp_path):
 
     # restart on the SAME store (it holds the persisted bars, incl. the two ticks)
     runner2 = BotRunner(
-        settings=settings, client=FakeClient(make_frame()), store=runner.store,
-        model=FixedModel([0.2, 0.1, 0.7]), meta={"model_id": "t"},
-        journal_dir=tmp_path / "runner", state_path=tmp_path / "runner" / "state.json",
+        settings=settings,
+        client=FakeClient(make_frame()),
+        store=runner.store,
+        model=FixedModel([0.2, 0.1, 0.7]),
+        meta={"model_id": "t"},
+        journal_dir=tmp_path / "runner",
+        state_path=tmp_path / "runner" / "state.json",
         warmup_bars=200,
     )
     runner2.warmup()
@@ -425,3 +439,53 @@ def test_executor_api_failures_reach_gate_streak_and_trip(tmp_path):
         result = executor.market_order("Buy", 0.01)
         assert result["status"] == "failed"
     assert runner.gate.kill_switch.is_tripped()  # streak reached the gate via the binding
+
+
+# ---------------------------------------------------------------- 5.2
+def test_save_snapshot_overwrites_atomically(tmp_path):
+    """5.2: a second snapshot must overwrite the first (os.replace), not raise
+    FileExistsError on Windows where the destination already exists."""
+    runner = make_runner(tmp_path, make_settings(tmp_path), FakeClient(make_frame()))
+    runner.last_ts = 111
+    runner._save_snapshot()
+    assert json.loads(runner.state_path.read_text(encoding="utf-8"))["last_ts"] == 111
+
+    runner.last_ts = 222
+    runner._save_snapshot()  # target already exists -> must not raise
+    assert json.loads(runner.state_path.read_text(encoding="utf-8"))["last_ts"] == 222
+
+
+# ---------------------------------------------------------------- 5.5
+def _open_a_long(runner):
+    runner.warmup()
+    runner.tick(now_ms=runner.last_ts + 2 * IV)  # enters long
+    assert runner.broker.direction == 1
+    return runner.broker.state.qty
+
+
+def test_reconcile_trips_when_exchange_holds_less_than_ledger(tmp_path):
+    """5.5: an exchange position SMALLER than the ledger (partial fill, manual
+    close) must trip reconciliation — the direction the old signed check missed."""
+    settings = make_settings(tmp_path)
+    client = FakeClient(make_frame(), extra_lows=[99.5, 99.5, 99.5, 99.5, 99.5])
+    executor = FakeExecutor()
+    runner = make_runner(tmp_path, settings, client, executor=executor)
+    qty = _open_a_long(runner)
+
+    executor.position = {"side": "Buy", "size": qty / 2.0}
+    runner._reconcile_position()
+    assert runner.gate.kill_switch.is_tripped()
+    assert (runner.state_path.parent / "KILL_SWITCH.json").exists()
+
+
+def test_reconcile_accepts_exchange_holding_slightly_more(tmp_path):
+    """5.5: within the 1% tolerance (1.005x), a larger exchange position must NOT trip."""
+    settings = make_settings(tmp_path)
+    client = FakeClient(make_frame(), extra_lows=[99.5, 99.5, 99.5, 99.5, 99.5])
+    executor = FakeExecutor()
+    runner = make_runner(tmp_path, settings, client, executor=executor)
+    qty = _open_a_long(runner)
+
+    executor.position = {"side": "Buy", "size": qty * 1.005}
+    runner._reconcile_position()
+    assert not runner.gate.kill_switch.is_tripped()

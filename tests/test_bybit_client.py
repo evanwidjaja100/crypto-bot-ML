@@ -1,4 +1,5 @@
 """BybitClient tests against a fake session: parsing, sorting, retries, throttling."""
+
 from __future__ import annotations
 
 import time
@@ -83,11 +84,32 @@ def test_server_time():
     assert client.server_time_ms() == 1_700_000_000_000
 
 
-def test_throttle_enforces_minimum_interval():
-    client = BybitClient(session=FakeSession(), requests_per_second=5)
-    client._last_call = 0.0
-    t0 = time.monotonic()
+def test_throttle_enforces_minimum_interval(monkeypatch):
+    current_time = 1000.0
+    sleeps = []
+
+    def fake_monotonic():
+        nonlocal current_time
+        return current_time
+
+    def fake_sleep(duration):
+        nonlocal current_time
+        sleeps.append(duration)
+        current_time += duration
+
+    monkeypatch.setattr(time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(time, "sleep", fake_sleep)
+
+    client = BybitClient(session=FakeSession(), requests_per_second=5.0)
+    # First call: _last_call is 0.0, no sleep needed; _last_call updated to 1000.0
     client._request("get_server_time")
+    assert sleeps == []
+    assert client._last_call == 1000.0
+
+    # Advance time slightly (0.05s, less than 0.2s minimum interval)
+    current_time = 1000.05
     client._request("get_server_time")
-    elapsed = time.monotonic() - t0
-    assert elapsed >= 0.19  # 2 calls @ 5 rps -> at least ~0.2s of spacing
+    # Must sleep for the remaining interval: 0.2 - 0.05 = 0.15s
+    assert len(sleeps) == 1
+    assert pytest.approx(sleeps[0]) == 0.15
+    assert client._last_call == 1000.2

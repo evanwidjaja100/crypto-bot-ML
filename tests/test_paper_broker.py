@@ -1,7 +1,7 @@
 """PaperBroker tests: fill semantics must match the backtester exactly."""
+
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -9,24 +9,33 @@ from src.config import RiskSettings
 from src.execution.paper_broker import PaperBroker
 
 RISK = RiskSettings(
-    risk_per_trade_pct=0.5, leverage_cap=3, max_notional_pct=100.0,
-    stop_loss_atr_mult=2.0, take_profit_atr_mult=3.0,
-    min_hold_bars=1, max_hold_bars=60, cooldown_bars=5,
+    risk_per_trade_pct=0.5,
+    leverage_cap=3,
+    max_notional_pct=100.0,
+    stop_loss_atr_mult=2.0,
+    take_profit_atr_mult=3.0,
+    min_hold_bars=1,
+    max_hold_bars=60,
+    cooldown_bars=5,
 )
 
 IV = 300_000
 START = 1_700_000_000_000
 
 
-def bar(ts, o, h, l, c):
-    return pd.Series({"ts_ms": ts, "open": o, "high": h, "low": l, "close": c})
+def bar(ts, o, h, low, c):
+    return pd.Series({"ts_ms": ts, "open": o, "high": h, "low": low, "close": c})
 
 
 def broker(**kw):
     kw.setdefault("slippage_bps", 0.0)
     return PaperBroker(
-        initial_equity=10_000.0, taker_fee=0.001, slippage_bps=kw.pop("slippage_bps"),
-        funding_rate=0.0001, risk_cfg=RISK, **kw,
+        initial_equity=10_000.0,
+        taker_fee=0.001,
+        slippage_bps=kw.pop("slippage_bps"),
+        funding_rate=0.0001,
+        risk_cfg=RISK,
+        **kw,
     )
 
 
@@ -108,7 +117,9 @@ def test_flat_close_is_market_with_slippage():
     fill = b.close_position(START + 2 * IV, 100.0, "signal_flat")
     assert fill.price == pytest.approx(100.0 * 0.999)  # long sells low
     # entry 100.1 (slipped), exit 99.9 -> gross -5, fees 2.5025 + 2.4975
-    assert fill.realized_pnl == pytest.approx(25 * (99.9 - 100.1) - 25 * 100.1 * 0.001 - 25 * 99.9 * 0.001)
+    assert fill.realized_pnl == pytest.approx(
+        25 * (99.9 - 100.1) - 25 * 100.1 * 0.001 - 25 * 99.9 * 0.001
+    )
     assert b.direction == 0
 
 

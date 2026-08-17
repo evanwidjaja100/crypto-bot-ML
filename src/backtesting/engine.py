@@ -19,10 +19,11 @@ The risk limits enforced here are the sizing caps (leverage / notional / risk
 budget). The hard live limits (kill switch, daily loss) are enforced by
 src/risk/gate.py in the runner, not simulated here.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Callable
+from dataclasses import dataclass
+from typing import Callable
 
 import numpy as np
 import pandas as pd
@@ -32,7 +33,6 @@ from ..data_ingestion.intervals import FUNDING_INTERVAL_MS
 from ..risk.sizing import compute_stops, size_position
 from ..strategy.signal_engine import (
     FLAT,
-    HOLD,
     OPEN_LONG,
     OPEN_SHORT,
     PositionState,
@@ -136,9 +136,18 @@ class BacktestEngine:
         self._state.bars_in_position = 0
         self._state.entry_ts_ms = ts_ms
         self._open_trade = TradeRecord(
-            entry_ts_ms=ts_ms, entry_price=entry_price, direction=side, qty=qty,
-            exit_ts_ms=0, exit_price=0.0, exit_reason="", gross_pnl=0.0,
-            fees=fee, funding=0.0, net_pnl=0.0, bars_held=0,
+            entry_ts_ms=ts_ms,
+            entry_price=entry_price,
+            direction=side,
+            qty=qty,
+            exit_ts_ms=0,
+            exit_price=0.0,
+            exit_reason="",
+            gross_pnl=0.0,
+            fees=fee,
+            funding=0.0,
+            net_pnl=0.0,
+            bars_held=0,
         )
 
     def _close_position(
@@ -149,22 +158,25 @@ class BacktestEngine:
         *,
         limit_fill: bool = False,
     ) -> None:
+        open_trade = self._open_trade
+        if open_trade is None:
+            raise RuntimeError("_close_position called with no open trade")
         side = self._state.direction
         exit_price = basis_price if limit_fill else self._market_exit_price(basis_price)
         gross = side * self._state.qty * (exit_price - self._state.entry_price)
         fee = self._state.qty * exit_price * (self.maker_fee if limit_fill else self.taker_fee)
         self._cash += gross - fee
         self._fees_total += fee
-        self._realized += gross - fee + self._open_trade.funding
+        self._realized += gross - fee + open_trade.funding
 
-        self._open_trade.exit_ts_ms = ts_ms
-        self._open_trade.exit_price = exit_price
-        self._open_trade.exit_reason = reason
-        self._open_trade.gross_pnl = gross
-        self._open_trade.fees += fee
-        self._open_trade.net_pnl = gross - self._open_trade.fees + self._open_trade.funding
-        self._open_trade.bars_held = self._state.bars_in_position
-        self.trades.append(self._open_trade)
+        open_trade.exit_ts_ms = ts_ms
+        open_trade.exit_price = exit_price
+        open_trade.exit_reason = reason
+        open_trade.gross_pnl = gross
+        open_trade.fees += fee
+        open_trade.net_pnl = gross - open_trade.fees + open_trade.funding
+        open_trade.bars_held = self._state.bars_in_position
+        self.trades.append(open_trade)
         self._open_trade = None
 
         if reason in ("stop_loss", "stop_loss_gap"):
@@ -178,7 +190,10 @@ class BacktestEngine:
     def _check_exits(self, bar: pd.Series) -> None:
         side = self._state.direction
         open_p, high, low, close_p = (
-            float(bar["open"]), float(bar["high"]), float(bar["low"]), float(bar["close"]),
+            float(bar["open"]),
+            float(bar["high"]),
+            float(bar["low"]),
+            float(bar["close"]),
         )
         ts = int(bar["ts_ms"])
         stop = self._state.stop_price
@@ -256,15 +271,24 @@ class BacktestEngine:
                 self._check_exits(bar)
 
             if self._state.direction != 0 and ts % FUNDING_INTERVAL_MS == 0:
-                funding_pnl = -self._state.direction * self._state.qty * float(bar["close"]) * self.funding_rate
+                funding_pnl = (
+                    -self._state.direction
+                    * self._state.qty
+                    * float(bar["close"])
+                    * self.funding_rate
+                )
                 self._cash += funding_pnl
                 self._realized += funding_pnl
                 self._funding_total += funding_pnl
-                self._open_trade.funding += funding_pnl
+                if self._open_trade is not None:
+                    self._open_trade.funding += funding_pnl
 
             unrealized = (
-                self._state.direction * self._state.qty * (float(bar["close"]) - self._state.entry_price)
-                if self._state.direction != 0 else 0.0
+                self._state.direction
+                * self._state.qty
+                * (float(bar["close"]) - self._state.entry_price)
+                if self._state.direction != 0
+                else 0.0
             )
             equity = self._cash + unrealized
             self._equity_last = equity
@@ -277,7 +301,9 @@ class BacktestEngine:
             self._close_position(int(last["ts_ms"]), float(last["close"]), "end_of_backtest")
 
         equity_df = pd.DataFrame(self.equity_curve)
-        trades_df = pd.DataFrame([t.__dict__ for t in self.trades]) if self.trades else pd.DataFrame()
+        trades_df = (
+            pd.DataFrame([t.__dict__ for t in self.trades]) if self.trades else pd.DataFrame()
+        )
         decisions_df = pd.DataFrame(self.decisions)
         metrics = backtest_metrics(equity_df, trades_df, self.interval_ms, self.initial_equity)
         return {
@@ -309,8 +335,11 @@ def backtest_metrics(
         "annualized_return": float(
             (equity[-1] / initial_equity) ** (candles_per_year / len(equity)) - 1.0
         )
-        if equity[-1] > 0 else -1.0,
-        "sharpe": float(rets.mean() / rets.std() * np.sqrt(candles_per_year)) if rets.std() > 0 else 0.0,
+        if equity[-1] > 0
+        else -1.0,
+        "sharpe": float(rets.mean() / rets.std() * np.sqrt(candles_per_year))
+        if rets.std() > 0
+        else 0.0,
         "max_drawdown": max_dd,
         "n_candles": len(equity),
     }

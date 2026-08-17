@@ -8,11 +8,13 @@ shows tradeable trend structure at this timeframe.
 Usage:
     python scripts/benchmark_rulesets.py
 """
+
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
-sys.path.insert(0, __file__.rsplit("/", 2)[0])
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.backtesting.engine import BacktestEngine
 from src.config import load_settings
@@ -34,32 +36,38 @@ def main(argv: list[str] | None = None) -> int:
 
     frame = rulesets.add_trend_columns(df)
     frame = frame.dropna(subset=rulesets.TREND_COLUMNS).reset_index(drop=True)
-    risk = settings.risk.model_copy(update={"stop_loss_atr_mult": 5.0, "take_profit_atr_mult": 100.0})
+    risk = settings.risk.model_copy(
+        update={"stop_loss_atr_mult": 5.0, "take_profit_atr_mult": 100.0}
+    )
     print(f"candles={len(df)} usable={len(frame)} (trend-fair risk: 5xATR stop, no TP)")
 
-    header = (f"{'ruleset':<12} {'gross':>9} {'ret':>9} {'sharpe':>7} {'max_dd':>8} "
-              f"{'pf':>6} {'win':>6} {'n_trades':>9} {'fees':>10}")
+    header = (
+        f"{'ruleset':<12} {'gross':>9} {'ret':>9} {'sharpe':>7} {'max_dd':>8} "
+        f"{'pf':>6} {'win':>6} {'n_trades':>9} {'fees':>10}"
+    )
     print(header)
     results: dict[str, dict] = {}
     for name, decider in rulesets.RULESETS.items():
-        m = (
-            BacktestEngine(
-                frame, decider, initial_equity=settings.backtest.initial_equity,
-                taker_fee=settings.execution.taker_fee,
-                slippage_bps=settings.execution.slippage_bps,
-                funding_rate=settings.backtest.funding_rate,
-                risk_cfg=risk, interval_ms=INTERVAL_MS[settings.interval],
-            )
-            .run()["metrics"]
-        )
-        g = (
-            BacktestEngine(
-                frame, decider, initial_equity=settings.backtest.initial_equity,
-                taker_fee=0.0, slippage_bps=0.0, funding_rate=0.0,
-                risk_cfg=risk, interval_ms=INTERVAL_MS[settings.interval],
-            )
-            .run()["metrics"]
-        )
+        m = BacktestEngine(
+            frame,
+            decider,
+            initial_equity=settings.backtest.initial_equity,
+            taker_fee=settings.execution.taker_fee,
+            slippage_bps=settings.execution.slippage_bps,
+            funding_rate=settings.backtest.funding_rate,
+            risk_cfg=risk,
+            interval_ms=INTERVAL_MS[settings.interval],
+        ).run()["metrics"]
+        g = BacktestEngine(
+            frame,
+            decider,
+            initial_equity=settings.backtest.initial_equity,
+            taker_fee=0.0,
+            slippage_bps=0.0,
+            funding_rate=0.0,
+            risk_cfg=risk,
+            interval_ms=INTERVAL_MS[settings.interval],
+        ).run()["metrics"]
         m["gross_pnl"] = g["total_gross_pnl"]
         results[name] = m
         print(
@@ -74,7 +82,9 @@ def main(argv: list[str] | None = None) -> int:
         ok = m["total_return"] > 0.0 and m["profit_factor"] >= 1.0 and m["gross_pnl"] > 0.0
         any_pass |= ok
         print(f"  {name:<12} {'TRADEABLE EDGE' if ok else 'no edge'}")
-    print("reference: ML baseline (threshold 0.40) was -11.5% total, pf 0.42; its gross pnl was -303.")
+    print(
+        "reference: ML baseline (threshold 0.40) was -11.5% total, pf 0.42; its gross pnl was -303."
+    )
     return 0 if any_pass else 2
 
 

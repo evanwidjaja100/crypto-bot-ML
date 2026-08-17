@@ -1,9 +1,9 @@
 """Strategy engine tests: thresholds, hold rules, cooldown, reverse."""
+
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from src.config import RiskSettings, StrategySettings
 from src.strategy.signal_engine import (

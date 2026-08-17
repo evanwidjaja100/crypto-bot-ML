@@ -7,11 +7,11 @@ Requires both --reason (what you fixed) and --yes. Appends the trip + reset
 pair to the audit log before removing the tombstone, so the trip history
 survives the reset.
 """
+
 from __future__ import annotations
 
 import argparse
 import json
-import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -31,7 +31,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"no tombstone at {args.tombstone} — the kill switch is not tripped")
         return 0
 
-    data = json.loads(args.tombstone.read_text())
+    data = json.loads(args.tombstone.read_text(encoding="utf-8"))
     print(f"tombstone: reason={data.get('reason')!r} tripped_at={data.get('tripped_at')}")
     if not args.yes:
         print("nothing changed; re-run with --yes to reset")
@@ -44,7 +44,7 @@ def main(argv: list[str] | None = None) -> int:
         "reset_reason": args.reason,
     }
     args.audit.parent.mkdir(parents=True, exist_ok=True)
-    with open(args.audit, "a") as fh:
+    with open(args.audit, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(record) + "\n")
     args.tombstone.unlink()
     print(f"kill switch reset; trip recorded in {args.audit}")

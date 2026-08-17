@@ -1,4 +1,5 @@
 """Structured JSON logging for every script and the future runner loop."""
+
 from __future__ import annotations
 
 import json

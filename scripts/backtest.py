@@ -3,6 +3,7 @@
 Usage:
     python scripts/backtest.py [--dataset data/datasets/<id>] [--model <model_id>]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -10,7 +11,9 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, __file__.rsplit("/", 2)[0])
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import logging
 
 import pandas as pd
 
@@ -18,11 +21,9 @@ from src.backtesting.engine import BacktestEngine
 from src.config import load_settings
 from src.data_ingestion.intervals import INTERVAL_MS
 from src.labels.dataset import load_dataset
-from src.models.store import latest_model, load_model
+from src.models.store import active_model, load_model
 from src.monitoring.logging_setup import setup_logging
 from src.strategy.signal_engine import PositionState, decide
-
-import logging
 
 log = logging.getLogger("backtest")
 
@@ -41,7 +42,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.model:
         model, meta = load_model(args.model, artifacts_dir)
     else:
-        loaded = latest_model(artifacts_dir)
+        loaded = active_model(artifacts_dir)
         if loaded is None:
             log.error("no trained model found; run scripts/train_model.py first")
             return 1
@@ -53,7 +54,8 @@ def main(argv: list[str] | None = None) -> int:
     else:
         candidates = sorted(
             (Path(settings.data.data_dir) / "datasets").glob("*/"),
-            key=lambda p: p.stat().st_mtime, reverse=True,
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
         )
         if not candidates:
             log.error("no datasets found; run scripts/build_features.py first")
@@ -67,7 +69,16 @@ def main(argv: list[str] | None = None) -> int:
     if meta["feature_set_id"] != ds_meta["feature_set_id"]:
         log.warning(
             "feature_set mismatch: model=%s dataset=%s — results are NOT valid; refusing.",
-            meta["feature_set_id"], ds_meta["feature_set_id"],
+            meta["feature_set_id"],
+            ds_meta["feature_set_id"],
+        )
+        return 2
+
+    if meta.get("label_set_id", "") != ds_meta.get("label_set_id", ""):
+        log.warning(
+            "label_set mismatch: model=%s dataset=%s — results are NOT valid; refusing.",
+            meta.get("label_set_id"),
+            ds_meta.get("label_set_id"),
         )
         return 2
 
@@ -76,7 +87,10 @@ def main(argv: list[str] | None = None) -> int:
 
     def decision_fn(row: pd.Series, state: PositionState):
         return decide(
-            row, state, settings.strategy, settings.risk,
+            row,
+            state,
+            settings.strategy,
+            settings.risk,
             proba_by_ts[int(row["ts_ms"])],
         )
 
@@ -106,7 +120,11 @@ def main(argv: list[str] | None = None) -> int:
     result["trades"].to_parquet(out_dir / "trades.parquet", index=False)
     result["decisions"].to_parquet(out_dir / "decisions.parquet", index=False)
     (out_dir / "summary.json").write_text(
-        json.dumps({"metrics": {k: (float(v) if isinstance(v, float) else v) for k, v in metrics.items()}}, indent=2)
+        json.dumps(
+            {"metrics": {k: (float(v) if isinstance(v, float) else v) for k, v in metrics.items()}},
+            indent=2,
+        ),
+        encoding="utf-8",
     )
     print(f"saved -> {out_dir}")
     return 0

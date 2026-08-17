@@ -11,10 +11,12 @@ Loop semantics match the backtester exactly:
   - Every decision, fill, funding payment and equity mark is appended to a
     JSONL journal; a state snapshot allows restart without re-arming a trade.
 """
+
 from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,8 +29,8 @@ from ..data_ingestion.intervals import INTERVAL_MS
 from ..data_ingestion.validation import validate_candles
 from ..execution.paper_broker import PaperBroker, PaperFill
 from ..features.pipeline import build_feature_frame
-from ..risk.gate import RiskGate
 from ..risk.exceptions import KillSwitchTripped
+from ..risk.gate import RiskGate
 from ..strategy.signal_engine import FLAT, OPEN_LONG, OPEN_SHORT, SignalDecision, decide
 
 log = logging.getLogger("runner")
@@ -88,8 +90,10 @@ class BotRunner:
     # ------------------------------------------------------------------ io
     def _journal(self, record: dict) -> None:
         day = datetime.now(timezone.utc).strftime("%Y%m%d")
-        record = {k: (_f(v) if isinstance(v, (np.floating, np.integer)) else v) for k, v in record.items()}
-        with open(self.journal_dir / f"journal_{day}.jsonl", "a") as fh:
+        record = {
+            k: (_f(v) if isinstance(v, (np.floating, np.integer)) else v) for k, v in record.items()
+        }
+        with open(self.journal_dir / f"journal_{day}.jsonl", "a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, default=str) + "\n")
 
     def _save_snapshot(self) -> None:
@@ -99,14 +103,14 @@ class BotRunner:
             "daily_loss": self.gate.daily_loss.snapshot(),
         }
         tmp = self.state_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(snap, default=str))
-        tmp.rename(self.state_path)
+        tmp.write_text(json.dumps(snap, default=str), encoding="utf-8")
+        os.replace(tmp, self.state_path)  # atomic overwrite on POSIX and Windows
 
     def _restore_snapshot(self) -> bool:
         if not self.state_path.exists():
             return False
         try:
-            snap = json.loads(self.state_path.read_text())
+            snap = json.loads(self.state_path.read_text(encoding="utf-8"))
             if "daily_loss" not in snap:
                 # legacy pre-F3 snapshot: half-restoring (broker without the
                 # daily-loss state) would let a new trade open on a day that
@@ -139,7 +143,10 @@ class BotRunner:
             from ..data_ingestion.candle_downloader import incremental_update
 
             df, _ = incremental_update(
-                self.client, self.settings.symbol, self.settings.interval, self.store,
+                self.client,
+                self.settings.symbol,
+                self.settings.interval,
+                self.store,
                 history_days=self.settings.data.history_days,
             )
         self.ctx = df.tail(self.warmup_bars).reset_index(drop=True)
@@ -166,10 +173,13 @@ class BotRunner:
         row = matches.iloc[-1]
         cols = sorted(c for c in frame.columns if c.startswith("f_"))
         proba = self.model.predict_proba(pd.DataFrame([row[cols]], columns=cols))[0]
-        self.pending = decide(row, self.broker.state, self.settings.strategy, self.settings.risk, proba)
+        self.pending = decide(
+            row, self.broker.state, self.settings.strategy, self.settings.risk, proba
+        )
         self._journal(
             {
-                "type": "decision", "ts_ms": int(row["ts_ms"]),
+                "type": "decision",
+                "ts_ms": int(row["ts_ms"]),
                 "action": self.pending.action,
                 "reasons": "; ".join(self.pending.reasons),
                 "proba_long": self.pending.proba_long,
@@ -200,11 +210,19 @@ class BotRunner:
         if first_new > self.last_ts + self.interval_ms:
             from ..data_ingestion.candle_downloader import download_range
 
-            log.warning("gap detected: cache last_ts=%d, fetch starts at %d — backfilling", self.last_ts, first_new)
+            log.warning(
+                "gap detected: cache last_ts=%d, fetch starts at %d — backfilling",
+                self.last_ts,
+                first_new,
+            )
             backfill = download_range(
-                self.client, self.settings.symbol, self.settings.interval,
-                self.last_ts + self.interval_ms, first_new + self.interval_ms,
-                chunk_days=self.settings.data.chunk_days, page_size=self.settings.data.page_size,
+                self.client,
+                self.settings.symbol,
+                self.settings.interval,
+                self.last_ts + self.interval_ms,
+                first_new + self.interval_ms,
+                chunk_days=self.settings.data.chunk_days,
+                page_size=self.settings.data.page_size,
             )
             closed = (
                 pd.concat([backfill, closed], ignore_index=True)
@@ -221,7 +239,8 @@ class BotRunner:
             # cache and the first new bar, not just within the batch.
             recent = pd.concat([self.ctx.tail(2), new_bars], ignore_index=True)
             report = validate_candles(
-                recent, self.interval_ms,
+                recent,
+                self.interval_ms,
                 max_bar_move_pct=self.settings.data.max_bar_move_pct,
             )
             if not report.ok:
@@ -241,12 +260,15 @@ class BotRunner:
         """Append processed closed bars to the parquet cache so a restart resumes from real data."""
         if bars is None or bars.empty:
             return
-        existing = self.store.load(self.settings.symbol, self.settings.interval)
-        if existing is None or existing.empty:
-            self.store.write(bars, self.settings.symbol, self.settings.interval)
+        if hasattr(self.store, "append"):
+            self.store.append(bars, self.settings.symbol, self.settings.interval, validate=False)
         else:
-            merged = pd.concat([existing, bars], ignore_index=True)
-            self.store.write(merged, self.settings.symbol, self.settings.interval)
+            existing = self.store.load(self.settings.symbol, self.settings.interval)
+            if existing is None or existing.empty:
+                self.store.write(bars, self.settings.symbol, self.settings.interval)
+            else:
+                merged = pd.concat([existing, bars], ignore_index=True)
+                self.store.write(merged, self.settings.symbol, self.settings.interval)
 
     def _process_bar(self, bar: pd.Series) -> list[dict]:
         ts = int(bar["ts_ms"])
@@ -264,12 +286,19 @@ class BotRunner:
             records.append(record)
             self._journal(record)
 
-        equity, unrealized = self.broker.equity(float(bar["close"])), self.broker.unrealized(float(bar["close"]))
+        equity, unrealized = (
+            self.broker.equity(float(bar["close"])),
+            self.broker.unrealized(float(bar["close"])),
+        )
         mark = {"type": "mark", "ts_ms": ts, "equity": equity, "unrealized": unrealized}
         records.append(mark)
         self._journal(mark)
 
-        self.ctx = pd.concat([self.ctx, bar.to_frame().T], ignore_index=True).tail(self.warmup_bars).reset_index(drop=True)
+        self.ctx = (
+            pd.concat([self.ctx, bar.to_frame().T], ignore_index=True)
+            .tail(self.warmup_bars)
+            .reset_index(drop=True)
+        )
         self.last_ts = ts
         self._decide_on_last()
         self._save_snapshot()
@@ -277,8 +306,13 @@ class BotRunner:
 
     def _record_fill(self, fill: PaperFill) -> list[dict]:
         record = {
-            "type": "fill", "ts_ms": fill.ts_ms, "action": fill.action, "price": fill.price,
-            "qty": fill.qty, "reason": fill.reason, "fee": fill.fee,
+            "type": "fill",
+            "ts_ms": fill.ts_ms,
+            "action": fill.action,
+            "price": fill.price,
+            "qty": fill.qty,
+            "reason": fill.reason,
+            "fee": fill.fee,
             "realized_pnl": fill.realized_pnl,
         }
         self._journal(record)
@@ -302,15 +336,21 @@ class BotRunner:
                 if qty is None:
                     return []
                 approval = self.gate.approve_entry(
-                    direction=direction, qty=qty, entry_price=entry,
+                    direction=direction,
+                    qty=qty,
+                    entry_price=entry,
                     equity=self.broker.equity(),
-                    open_positions=0,
+                    open_positions=1 if self.broker.direction != 0 else 0,
                     ts_ms=ts,
                 )
                 if not approval.approved:
                     self._journal(
-                        {"type": "rejected", "ts_ms": ts, "action": decision.action,
-                         "reasons": "; ".join(approval.reasons)}
+                        {
+                            "type": "rejected",
+                            "ts_ms": ts,
+                            "action": decision.action,
+                            "reasons": "; ".join(approval.reasons),
+                        }
                     )
                     return []
                 fill = self.broker.open_position(ts, open_p, direction, atr, qty=qty)
@@ -333,13 +373,21 @@ class BotRunner:
             if qty is None:
                 return [close_fill]
             approval = self.gate.approve_entry(
-                direction=side, qty=qty, entry_price=entry,
-                equity=self.broker.equity(), open_positions=0, ts_ms=ts,
+                direction=side,
+                qty=qty,
+                entry_price=entry,
+                equity=self.broker.equity(),
+                open_positions=1 if self.broker.direction != 0 else 0,
+                ts_ms=ts,
             )
             if not approval.approved:
                 self._journal(
-                    {"type": "rejected", "ts_ms": ts, "action": decision.action,
-                     "reasons": "; ".join(approval.reasons)}
+                    {
+                        "type": "rejected",
+                        "ts_ms": ts,
+                        "action": decision.action,
+                        "reasons": "; ".join(approval.reasons),
+                    }
                 )
                 return [close_fill]
             open_fill = self.broker.open_position(ts, open_p, side, decision.atr_value, qty=qty)
@@ -348,15 +396,21 @@ class BotRunner:
             return [self.broker.close_position(ts, open_p, "signal_flat")]
         return []
 
-    def _execution_qty(self, decision: SignalDecision, direction: int, entry: float, ts: int) -> float | None:
+    def _execution_qty(
+        self, decision: SignalDecision, direction: int, entry: float, ts: int
+    ) -> float | None:
         """Size + exchange-sanitize a proposed qty. Returns None if rejected."""
         qty = self.broker.propose_qty(direction, entry, decision.atr_value)
         if self.executor is not None:
             qty, reasons = self.executor.sanitize_qty(qty, entry)
             if reasons:
                 self._journal(
-                    {"type": "rejected", "ts_ms": ts, "action": decision.action,
-                     "reasons": "; ".join(reasons)}
+                    {
+                        "type": "rejected",
+                        "ts_ms": ts,
+                        "action": decision.action,
+                        "reasons": "; ".join(reasons),
+                    }
                 )
                 return None
         return qty
@@ -367,7 +421,13 @@ class BotRunner:
         is_close = fill.action.startswith("CLOSE")
         side = "Sell" if fill.action in ("CLOSE_LONG", "OPEN_SHORT") else "Buy"
         result = self.executor.market_order(side, fill.qty, reduce_only=is_close)
-        log.info("order %s %s %s -> %s", side, fill.qty, "reduce" if is_close else "open", result["status"])
+        log.info(
+            "order %s %s %s -> %s",
+            side,
+            fill.qty,
+            "reduce" if is_close else "open",
+            result["status"],
+        )
         if result["status"] == "failed":
             self.gate.kill_switch.trip(
                 f"order {side} {fill.qty} {fill.action} failed to reach the exchange"
@@ -407,12 +467,14 @@ class BotRunner:
             want = ("Sell", self.broker.state.qty)
         if pos is None:
             if want is not None:
-                self.gate.kill_switch.trip("startup reconciliation: exchange is flat, ledger holds a position")
+                self.gate.kill_switch.trip(
+                    "startup reconciliation: exchange is flat, ledger holds a position"
+                )
                 log.error("reconciliation mismatch: exchange flat, ledger=%s", want)
             return
         side = "Buy" if pos["side"] == "Buy" else "Sell"
         qty = pos["size"]
-        if want is None or side != want[0] or (qty - want[1]) > max(1e-6, want[1] * 0.01):
+        if want is None or side != want[0] or abs(qty - want[1]) > max(1e-6, want[1] * 0.01):
             self.gate.kill_switch.trip(
                 f"startup reconciliation mismatch: exchange={pos} ledger={want}"
             )

@@ -1,4 +1,5 @@
 """Phase 9: risk-based position sizing and ATR stop/target prices."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -67,7 +68,9 @@ def size_position(
     info = {
         "notional": notional,
         "leverage": notional / equity if equity else 0.0,
-        "effective_risk_pct": (qty * price_risk / equity * 100.0) if equity and not np.isnan(price_risk) else 0.0,
+        "effective_risk_pct": (qty * price_risk / equity * 100.0)
+        if equity and not np.isnan(price_risk)
+        else 0.0,
         "price_risk": price_risk,
         "caps_applied": {"leverage_cap": cap_leverage, "max_notional": cap_notional},
     }

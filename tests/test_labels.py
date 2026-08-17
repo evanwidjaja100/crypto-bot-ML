@@ -1,11 +1,12 @@
 """Label correctness: formula, tail NaN, class coverage, causality probe."""
+
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 import pytest
-
 from conftest import make_candles
+
 from src.config import LabelSettings
 from src.labels.labeler import CLASS_FLAT, CLASS_LONG, CLASS_SHORT, add_labels
 
@@ -23,7 +24,7 @@ def test_tail_labels_are_nan(candles, label_settings):
     h = label_settings.horizon
     out = add_labels(candles, label_settings)
     assert out["label"].iloc[-h:].isna().all()
-    assert out["label"].iloc[: -h].notna().all()
+    assert out["label"].iloc[:-h].notna().all()
 
 
 def test_all_classes_present_on_volatile_data():
@@ -56,7 +57,9 @@ def test_labels_use_only_future_close_of_exact_horizon():
     out2 = add_labels(df2, cfg)
 
     idx = out.index.to_numpy()
-    unaffected = (idx < i - cfg.horizon) | (idx >= i + cfg.threshold_window)
+    # fwd_return changes at {i-horizon, i}; the (trailing) threshold changes in
+    # [i, i+horizon+window) — so labels may change only in [i-h, i+h+window).
+    unaffected = (idx < i - cfg.horizon) | (idx >= i + cfg.horizon + cfg.threshold_window)
     # fwd_return changes exactly at rows {i-horizon, i}
     fwd_same = pd.Series(
         np.isclose(out["fwd_return"], out2["fwd_return"], equal_nan=True), index=out.index
@@ -65,7 +68,27 @@ def test_labels_use_only_future_close_of_exact_horizon():
     assert not bool(fwd_same.loc[i])
     others = (idx != i - cfg.horizon) & (idx != i)
     assert bool(fwd_same.loc[others].all())
-    # labels must be identical everywhere outside [i-horizon, i+window)
+    # labels must be identical everywhere outside the affected range
     pd.testing.assert_series_equal(
         out.loc[unaffected, "label"], out2.loc[unaffected, "label"], check_names=False
+    )
+
+
+def test_label_threshold_is_past_only():
+    """F12 / 7.2: the label threshold must depend only on trailing data —
+    mutating FUTURE closes (t+1..t+h) must not move threshold[t]."""
+    cfg = LabelSettings(horizon=5, threshold_window=10)
+    df = make_candles(500, seed=13)
+    out = add_labels(df, cfg)
+
+    t = 300
+    df2 = df.copy()
+    for j in range(1, cfg.horizon + 1):
+        df2.loc[t + j, "close"] *= 1.5  # only futures closes are perturbed
+    out2 = add_labels(df2, cfg)
+
+    pd.testing.assert_series_equal(
+        out["label_threshold"].iloc[: t + 1],
+        out2["label_threshold"].iloc[: t + 1],
+        check_names=False,
     )

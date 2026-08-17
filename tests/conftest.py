@@ -1,9 +1,31 @@
 """Shared fixtures: deterministic synthetic OHLCV generator."""
+
 from __future__ import annotations
+
+import ctypes
+import sys
 
 import numpy as np
 import pandas as pd
 import pytest
+
+# On 64-bit Windows, ctypes defaults undeclared arguments to 32-bit int, which
+# truncates 64-bit pointer addresses in LGBM_DatasetSetField and causes access violations.
+if sys.platform == "win32":
+    try:
+        import lightgbm.basic as _lgb_basic
+
+        if hasattr(_lgb_basic, "_LIB"):
+            _lgb_basic._LIB.LGBM_DatasetSetField.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_char_p,
+                ctypes.c_void_p,
+                ctypes.c_int32,
+                ctypes.c_int32,
+            ]
+            _lgb_basic._LIB.LGBM_DatasetSetField.restype = ctypes.c_int32
+    except Exception:
+        pass
 
 
 def make_candles(

@@ -16,6 +16,10 @@ data:
   # never hit; any violation means the feed is wrong. --allow-jumps is the
   # explicit operator escape hatch in download_data.py.
   max_bar_move_pct: 25.0
+  # Most-recent rows (≈4 months of 60m bars ≈ 2900) carved as a holdout split
+  # the config scan / training NEVER reads; consulted exactly once per candidate
+  # before a promotion (7.4 / F10).
+  holdout_bars: 2900
 
 features:
   # v2: ATR normalized by close (scale-free model feature); raw ATR kept for stops
@@ -57,6 +61,15 @@ model:
     # Gate uses the real backtester on the held-out test split (not the crude proxy).
     min_engine_pf: 1.0
     min_engine_trades: 30
+    # ---- Phase 7 pre-registered holdout / burn-in criteria (7.6) ----
+    # Written down BEFORE the run that tests them. Gross per-trade edge must
+    # clear the ~15bp modeled round-trip cost with margin. Enforced once the
+    # holdout exists and the benchmark answers whether any config has edge.
+    min_gross_edge_bp: 20
+    min_holdout_trades: 100
+    min_holdout_pf: 1.15
+    max_drawdown_pct: 15.0
+    top5_trade_share: 0.50
 
 strategy:
   # Minimum probability required to open a position. The 8h-horizon edge only

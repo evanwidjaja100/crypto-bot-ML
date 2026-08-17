@@ -2,6 +2,7 @@
 
 Fails fast on invalid config (bad mode, unknown interval, live without confirmation).
 """
+
 from __future__ import annotations
 
 import os
@@ -32,6 +33,7 @@ class DataSettings(BaseModel):
     chunk_days: int = 30
     page_size: int = 1000
     max_bar_move_pct: float = 25.0  # blocking bar-to-bar close-move threshold; None disables
+    holdout_bars: int = 0  # most-recent rows carved as a holdout training never sees (7.4)
 
 
 class FeatureSettings(BaseModel):
@@ -207,7 +209,7 @@ class Settings(BaseModel):
 def load_settings(yaml_path: str | Path = ROOT / "config" / "settings.yaml") -> Settings:
     """Load settings.yaml, overlay environment overrides, return validated Settings."""
     path = Path(yaml_path)
-    raw: dict[str, Any] = yaml.safe_load(path.read_text()) if path.exists() else {}
+    raw: dict[str, Any] = yaml.safe_load(path.read_text(encoding="utf-8")) if path.exists() else {}
     env = EnvSettings()
 
     if env.bot_mode:

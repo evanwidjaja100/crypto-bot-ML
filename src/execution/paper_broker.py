@@ -10,10 +10,10 @@ comparable to the backtest:
     fill), at the target price without slippage.
   - Funding is a constant per-8h rate charged on funding boundaries
     (00/08/16 UTC) while in position.
-  - A stop-loss exit arms the cooldown (risk_cfg.cooldown_bars), which the
-    strategy then respects. The backtester does not simulate cooldown (it is
-    never armed there); paper mode is deliberately stricter.
+  - A stop-loss exit arms the cooldown (risk_cfg.cooldown_bars), which both
+    the backtester and paper mode respect before allowing a new entry.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -98,7 +98,13 @@ class PaperBroker:
 
     # ------------------------------------------------------------ execution
     def open_position(
-        self, ts_ms: int, open_price: float, direction: int, atr_value: float | None, *, qty: float | None = None
+        self,
+        ts_ms: int,
+        open_price: float,
+        direction: int,
+        atr_value: float | None,
+        *,
+        qty: float | None = None,
     ) -> PaperFill | None:
         if self.state.direction != 0:
             raise ValueError("cannot open while a position is held")
@@ -140,7 +146,11 @@ class PaperBroker:
         return PaperFill(
             ts_ms=ts_ms,
             action=OPEN_LONG if direction == 1 else OPEN_SHORT,
-            price=entry_price, qty=qty, reason="entry", fee=fee, realized_pnl=0.0,
+            price=entry_price,
+            qty=qty,
+            reason="entry",
+            fee=fee,
+            realized_pnl=0.0,
         )
 
     def close_position(
@@ -162,8 +172,13 @@ class PaperBroker:
         fill = PaperFill(
             ts_ms=ts_ms,
             action="CLOSE_LONG" if side == 1 else "CLOSE_SHORT",
-            price=exit_price, qty=self.state.qty, reason=reason, fee=fees, realized_pnl=net,
-            gross_pnl=gross, funding=self._funding_on_open,
+            price=exit_price,
+            qty=self.state.qty,
+            reason=reason,
+            fee=fees,
+            realized_pnl=net,
+            gross_pnl=gross,
+            funding=self._funding_on_open,
         )
         self._funding_on_open = 0.0
 
@@ -195,7 +210,9 @@ class PaperBroker:
         ts = int(bar["ts_ms"])
         funding_pnl = 0.0
         if self.state.direction != 0 and ts % FUNDING_INTERVAL_MS == 0:
-            funding_pnl = -self.state.direction * self.state.qty * float(bar["close"]) * self.funding_rate
+            funding_pnl = (
+                -self.state.direction * self.state.qty * float(bar["close"]) * self.funding_rate
+            )
             self._cash += funding_pnl
             self._funding_total += funding_pnl
             self._funding_on_open += funding_pnl
@@ -204,7 +221,10 @@ class PaperBroker:
     def _check_exits(self, bar) -> list[PaperFill]:
         side = self.state.direction
         open_p, high, low, close_p = (
-            float(bar["open"]), float(bar["high"]), float(bar["low"]), float(bar["close"]),
+            float(bar["open"]),
+            float(bar["high"]),
+            float(bar["low"]),
+            float(bar["close"]),
         )
         ts = int(bar["ts_ms"])
         stop = self.state.stop_price

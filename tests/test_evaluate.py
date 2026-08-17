@@ -1,11 +1,11 @@
 """Evaluation tests: classification metrics + the honest trading proxy."""
+
 from __future__ import annotations
 
 import numpy as np
-import pandas as pd
 import pytest
-
 from conftest import make_candles
+
 from src.models.evaluate import classification_metrics, simulate_trading
 
 
@@ -15,7 +15,15 @@ def test_classification_metrics_shape():
     y_proba = np.full((9, 3), 1 / 3)
     m = classification_metrics(y_true, y_pred, y_proba)
     assert m["accuracy"] == 1.0
-    assert set(m) >= {"accuracy", "balanced_accuracy", "precision_macro", "recall_macro", "f1_macro", "log_loss", "n"}
+    assert set(m) >= {
+        "accuracy",
+        "balanced_accuracy",
+        "precision_macro",
+        "recall_macro",
+        "f1_macro",
+        "log_loss",
+        "n",
+    }
     assert m["n"] == 9
 
 
