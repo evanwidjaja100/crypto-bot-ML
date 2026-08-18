@@ -210,6 +210,21 @@ class BasketRunner:
 
     # --------------------------------------------------------------- tick
     def tick(self, now_ms: int | None = None) -> dict[str, Any]:
+        if hasattr(self.client, "check_clock_drift"):
+            try:
+                is_synced, drift_ms = self.client.check_clock_drift()
+                if not is_synced:
+                    log.warning(
+                        "clock drift detected: local clock is off by %.1fms from Bybit server",
+                        drift_ms,
+                    )
+                    self.notifier.alert(
+                        "Clock Drift Alert",
+                        f"Local time drifted by {drift_ms:.1f}ms from Bybit server",
+                    )
+            except Exception as exc:  # noqa: BLE001
+                log.warning("clock drift check failed: %s", exc)
+
         now = now_ms if now_ms is not None else self.client.server_time_ms()
         total_records: list[dict] = []
         new_bars_count = 0
@@ -231,6 +246,10 @@ class BasketRunner:
             if not report.ok:
                 self.gates[sym].kill_switch.trip(
                     f"candle validation failed on {sym}: {report.errors}"
+                )
+                self.notifier.alert(
+                    "Kill Switch Tripped",
+                    f"Candle validation failed on {sym}: {report.errors}",
                 )
                 raise KillSwitchTripped(f"kill switch tripped on {sym}")
 

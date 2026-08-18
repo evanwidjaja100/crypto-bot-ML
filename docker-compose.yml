@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  crypto-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: crypto-bot
+    restart: on-failure:5
+    environment:
+      - BOT_MODE=${BOT_MODE:-paper}
+      - BYBIT_API_KEY=${BYBIT_API_KEY:-}
+      - BYBIT_API_SECRET=${BYBIT_API_SECRET:-}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - HEALTHCHECK_URL=${HEALTHCHECK_URL:-}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./artifacts:/app/artifacts
+      - ./config:/app/config
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"

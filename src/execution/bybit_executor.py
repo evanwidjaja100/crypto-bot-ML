@@ -201,3 +201,105 @@ class BybitExecutor:
             buyLeverage=str(leverage),
             sellLeverage=str(leverage),
         )
+
+    # -------------------------------------------------- Phase 9 Live Execution
+    def set_trading_stop(
+        self,
+        *,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
+        tp_trigger_by: str = "LastPrice",
+        sl_trigger_by: str = "LastPrice",
+    ) -> dict:
+        """Attach exchange-native position-level Stop Loss and/or Take Profit (F6)."""
+        kwargs: dict[str, Any] = {
+            "category": "linear",
+            "symbol": self.symbol,
+            "positionIdx": 0,  # One-Way mode
+            "tpslMode": "Full",
+            "tpTriggerBy": tp_trigger_by,
+            "slTriggerBy": sl_trigger_by,
+        }
+        if stop_loss is not None:
+            kwargs["stopLoss"] = f"{stop_loss:.4f}"
+        if take_profit is not None:
+            kwargs["takeProfit"] = f"{take_profit:.4f}"
+
+        return self._request("set_trading_stop", **kwargs)
+
+    def cancel_trading_stop(self) -> dict:
+        """Clear active exchange-native stop loss and take profit."""
+        return self._request(
+            "set_trading_stop",
+            category="linear",
+            symbol=self.symbol,
+            positionIdx=0,
+            stopLoss="0",
+            takeProfit="0",
+            tpslMode="Full",
+        )
+
+    def get_executions(self, order_link_id: str | None = None, limit: int = 10) -> list[dict]:
+        """Fetch actual execution fills from the exchange (F7, F20)."""
+        kwargs: dict[str, Any] = {
+            "category": "linear",
+            "symbol": self.symbol,
+            "limit": limit,
+        }
+        if order_link_id:
+            kwargs["orderLinkId"] = order_link_id
+
+        resp = self._request("get_executions", **kwargs)
+        raw_list = resp.get("result", {}).get("list", [])
+        executions: list[dict] = []
+        for item in raw_list:
+            executions.append(
+                {
+                    "exec_id": item.get("execId"),
+                    "order_id": item.get("orderId"),
+                    "order_link_id": item.get("orderLinkId"),
+                    "symbol": item.get("symbol"),
+                    "side": item.get("side"),
+                    "exec_price": float(item.get("execPrice", 0) or 0),
+                    "exec_qty": float(item.get("execQty", 0) or 0),
+                    "exec_fee": float(item.get("execFee", 0) or 0),
+                    "exec_type": item.get("execType"),
+                    "exec_time_ms": int(item.get("execTime", 0) or 0),
+                }
+            )
+        return executions
+
+    def get_closed_pnl(self, limit: int = 10) -> list[dict]:
+        """Fetch realized PnL and funding deductions for closed positions (F7, F20)."""
+        resp = self._request(
+            "get_closed_pnl",
+            category="linear",
+            symbol=self.symbol,
+            limit=limit,
+        )
+        raw_list = resp.get("result", {}).get("list", [])
+        records: list[dict] = []
+        for item in raw_list:
+            records.append(
+                {
+                    "order_id": item.get("orderId"),
+                    "symbol": item.get("symbol"),
+                    "side": item.get("side"),
+                    "qty": float(item.get("qty", 0) or 0),
+                    "entry_price": float(item.get("avgEntryPrice", 0) or 0),
+                    "exit_price": float(item.get("avgExitPrice", 0) or 0),
+                    "closed_pnl": float(item.get("closedPnl", 0) or 0),
+                    "created_time_ms": int(item.get("createdTime", 0) or 0),
+                }
+            )
+        return records
+
+    def server_time_ms(self) -> int:
+        """Fetch Bybit server time in milliseconds (F21)."""
+        resp = self._request("get_server_time")
+        # Bybit V5 returns time in seconds or ms in 'time' field
+        t = resp.get("time") or resp.get("result", {}).get("timeSecond")
+        if t is not None:
+            val = int(t)
+            return val if val > 1e11 else val * 1000
+        return int(time.time() * 1000)

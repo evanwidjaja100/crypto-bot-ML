@@ -89,7 +89,22 @@ class BybitClient:
     # ---------------------------------------------------------------- methods
     def server_time_ms(self) -> int:
         resp = self._request("get_server_time")
-        return int(resp["result"]["timeSecond"]) * 1000
+        # Bybit returns timeSecond or time
+        t = resp.get("result", {}).get("timeSecond") or resp.get("time")
+        if t is not None:
+            val = int(t)
+            return val if val > 1e11 else val * 1000
+        return int(time.time() * 1000)
+
+    def check_clock_drift(self, max_drift_ms: int = 5000) -> tuple[bool, float]:
+        """Compare local system time against Bybit server time (F21).
+
+        Returns (is_synced, drift_ms).
+        """
+        local_now = int(time.time() * 1000)
+        server_now = self.server_time_ms()
+        drift = abs(local_now - server_now)
+        return drift <= max_drift_ms, float(local_now - server_now)
 
     def fetch_candles(
         self,

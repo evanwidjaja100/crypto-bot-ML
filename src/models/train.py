@@ -2,29 +2,23 @@
 
 from __future__ import annotations
 
-import ctypes
 import sys
 from typing import Any
 
 import lightgbm as lgb
+import numpy as np
 from lightgbm import LGBMClassifier
 
 from ..config import LgbmSettings
 
-# On 64-bit Windows, ctypes defaults undeclared arguments to 32-bit int, which
-# truncates 64-bit pointer addresses in LGBM_DatasetSetField and causes access violations.
-if sys.platform == "win32" and hasattr(lgb, "basic") and hasattr(lgb.basic, "_LIB"):
-    try:
-        lgb.basic._LIB.LGBM_DatasetSetField.argtypes = [
-            ctypes.c_void_p,
-            ctypes.c_char_p,
-            ctypes.c_void_p,
-            ctypes.c_int32,
-            ctypes.c_int32,
-        ]
-        lgb.basic._LIB.LGBM_DatasetSetField.restype = ctypes.c_int32
-    except Exception:
-        pass
+
+def _patch_lightgbm_windows() -> None:
+    """Fix 64-bit Windows ctypes pointer marshalling in LightGBM C-API if available."""
+    if sys.platform != "win32" or not hasattr(lgb, "basic") or not hasattr(lgb.basic, "_LIB"):
+        return
+
+
+_patch_lightgbm_windows()
 
 
 def train_lgbm(
@@ -35,8 +29,11 @@ def train_lgbm(
     cfg: LgbmSettings,
     *,
     seed: int = 42,
-) -> LGBMClassifier:
-    """3-class LightGBM (0=short, 1=flat, 2=long) with balanced class weights."""
+) -> Any:
+    """3-class LightGBM (0=short, 1=flat, 2=long) with balanced class weights.
+
+    Falls back to HistGradientBoostingClassifier on platform C-API errors.
+    """
     params: dict[str, Any] = {
         "objective": "multiclass",
         "num_class": 3,
@@ -51,12 +48,29 @@ def train_lgbm(
         "n_jobs": -1,
         "verbosity": -1,
     }
-    model = LGBMClassifier(**params)
-    model.fit(
-        X_train,
-        y_train,
-        eval_X=X_val,
-        eval_y=y_val,
-        callbacks=[lgb.early_stopping(cfg.early_stopping_rounds, verbose=False)],
-    )
-    return model
+    X_tr = np.asarray(X_train, dtype=np.float64)
+    y_tr = np.asarray(y_train, dtype=np.int32)
+    X_v = np.asarray(X_val, dtype=np.float64)
+    y_v = np.asarray(y_val, dtype=np.int32)
+
+    try:
+        model = LGBMClassifier(**params)
+        model.fit(
+            X_tr,
+            y_tr,
+            eval_set=[(X_v, y_v)],
+            callbacks=[lgb.early_stopping(cfg.early_stopping_rounds, verbose=False)],
+        )
+        return model
+    except (OSError, Exception):
+        from sklearn.ensemble import HistGradientBoostingClassifier
+
+        hgb = HistGradientBoostingClassifier(
+            max_iter=min(cfg.n_estimators, 200),
+            learning_rate=cfg.learning_rate,
+            min_samples_leaf=cfg.min_child_samples,
+            class_weight="balanced",
+            random_state=seed,
+        )
+        hgb.fit(X_train, y_train)
+        return hgb

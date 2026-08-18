@@ -1,0 +1,24 @@
+[Unit]
+Description=Crypto Bot + ML Algorithmic Trading Harness
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=user
+WorkingDirectory=/opt/crypto-bot-ML
+EnvironmentFile=/opt/crypto-bot-ML/.env
+ExecStart=/home/user/.local/bin/uv run python scripts/run_bot.py --warmup-bars 2000
+Restart=on-failure
+RestartSec=10s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=crypto-bot
+
+# Security sandboxing
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/opt/crypto-bot-ML/data /opt/crypto-bot-ML/logs /opt/crypto-bot-ML/artifacts
+
+[Install]
+WantedBy=multi-user.target

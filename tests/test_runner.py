@@ -91,6 +91,11 @@ class FakeExecutor:
 
     def market_order(self, side, qty, reduce_only=False):
         self.orders.append((side, qty, reduce_only))
+        if self.status == "submitted":
+            if reduce_only:
+                self.position = None
+            else:
+                self.position = {"side": side, "size": qty, "entry_price": 100.0}
         return {"status": self.status, "order_id": "x", "order_link_id": "y"}
 
     def setup(self, leverage):

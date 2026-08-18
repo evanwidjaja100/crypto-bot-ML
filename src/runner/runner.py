@@ -195,6 +195,23 @@ class BotRunner:
     # ----------------------------------------------------------------- tick
     def tick(self, now_ms: int | None = None) -> dict:
         now = now_ms if now_ms is not None else int(time.time() * 1000)
+
+        # Phase 9.4: Clock-drift check
+        if hasattr(self.client, "check_clock_drift"):
+            try:
+                is_synced, drift_ms = self.client.check_clock_drift()
+                if not is_synced:
+                    log.warning(
+                        "clock drift detected: local clock is off by %.1fms from Bybit server",
+                        drift_ms,
+                    )
+                    self.notifier.alert(
+                        "Clock Drift Alert",
+                        f"Local time drifted by {drift_ms:.1f}ms from Bybit server",
+                    )
+            except Exception as exc:  # noqa: BLE001
+                log.warning("clock drift check failed: %s", exc)
+
         try:
             page = self.client.fetch_candles(self.settings.symbol, self.settings.interval, limit=10)
             self.gate.on_api_success()
@@ -256,6 +273,11 @@ class BotRunner:
         for _, bar in new_bars.iterrows():
             records += self._process_bar(bar)
         self._persist_bars(new_bars)
+
+        # Phase 9.3: Continuous per-bar reconciliation
+        if self.executor is not None:
+            self._reconcile_position()
+
         if self.gate.kill_switch.is_tripped():
             log.error("kill switch tripped: %s", self.gate.kill_switch.describe())
             raise KillSwitchTripped("kill switch tripped")
@@ -310,6 +332,7 @@ class BotRunner:
         return records
 
     def _record_fill(self, fill: PaperFill) -> list[dict]:
+        self._send_to_exchange(fill)
         record = {
             "type": "fill",
             "ts_ms": fill.ts_ms,
@@ -336,8 +359,18 @@ class BotRunner:
             )
             if not fill.gate_applied:
                 self.gate.on_position_closed(fill.realized_pnl, fill.ts_ms, self.broker.equity())
-        self._send_to_exchange(fill)
         return [record]
+
+    def _current_equity(self) -> float:
+        """Fetch live account equity from exchange if executor is wired; else local equity (F7)."""
+        if self.executor is not None and hasattr(self.executor, "get_equity"):
+            try:
+                eq = self.executor.get_equity()
+                if eq > 0:
+                    return eq
+            except Exception as exc:  # noqa: BLE001
+                log.warning("failed to get exchange equity (%s); falling back to ledger", exc)
+        return self.broker.equity()
 
     def _execute_pending(self, bar: pd.Series) -> list[PaperFill]:
         decision = self.pending
@@ -345,6 +378,7 @@ class BotRunner:
         open_p = float(bar["open"])
         ts = int(bar["ts_ms"])
         atr = decision.atr_value if decision else None
+        equity = self._current_equity()
 
         if self.broker.direction == 0:
             if decision and decision.action in (OPEN_LONG, OPEN_SHORT):
@@ -357,7 +391,7 @@ class BotRunner:
                     direction=direction,
                     qty=qty,
                     entry_price=entry,
-                    equity=self.broker.equity(),
+                    equity=equity,
                     open_positions=1 if self.broker.direction != 0 else 0,
                     ts_ms=ts,
                 )
@@ -384,7 +418,7 @@ class BotRunner:
             close_fill = self.broker.close_position(ts, open_p, "reverse")
             # apply the closed leg's realized P&L to the daily-loss tracker NOW so
             # the gate can reject the fresh leg on a day that just hit its limit
-            self.gate.on_position_closed(close_fill.realized_pnl, ts, self.broker.equity())
+            self.gate.on_position_closed(close_fill.realized_pnl, ts, equity)
             close_fill.gate_applied = True
             entry = open_p * (1.0 + side * self.broker.slippage)
             qty = self._execution_qty(decision, side, entry, ts)
@@ -394,7 +428,7 @@ class BotRunner:
                 direction=side,
                 qty=qty,
                 entry_price=entry,
-                equity=self.broker.equity(),
+                equity=equity,
                 open_positions=1 if self.broker.direction != 0 else 0,
                 ts_ms=ts,
             )
@@ -450,12 +484,46 @@ class BotRunner:
             self.gate.kill_switch.trip(
                 f"order {side} {fill.qty} {fill.action} failed to reach the exchange"
             )
+            self.notifier.alert(
+                "Kill Switch Tripped",
+                f"Order {side} {fill.qty} {fill.action} failed to reach exchange",
+            )
             log.error("ORDER FAILED to reach the exchange — kill switch tripped: %s", result)
             raise KillSwitchTripped("kill switch tripped: order failed to reach the exchange")
         if result["status"] == "already_placed":
             log.warning("order idempotently re-placed — reconciling with the exchange")
             self._reconcile_position()
-        # "submitted" is a clean placement; nothing to do
+
+        # Phase 9.2: Fetch real execution fill price and fee if available
+        if hasattr(self.executor, "get_executions") and result.get("order_link_id"):
+            try:
+                execs = self.executor.get_executions(order_link_id=result["order_link_id"])
+                if execs:
+                    total_qty = sum(e["exec_qty"] for e in execs)
+                    if total_qty > 0:
+                        avg_price = sum(e["exec_price"] * e["exec_qty"] for e in execs) / total_qty
+                        total_fee = sum(e["exec_fee"] for e in execs)
+                        fill.price = avg_price
+                        fill.fee = total_fee
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "could not fetch execution details (%s); using simulated fill values", exc
+                )
+
+        # Phase 9.1: Exchange-native stops and targets
+        if fill.action.startswith("OPEN") and hasattr(self.executor, "set_trading_stop"):
+            try:
+                stop_price = self.broker.state.stop_price
+                target_price = self.broker.state.target_price
+                self.executor.set_trading_stop(stop_loss=stop_price, take_profit=target_price)
+                log.info("attached exchange-native stop: SL=%s TP=%s", stop_price, target_price)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("failed to attach exchange-native stop (%s)", exc)
+        elif is_close and hasattr(self.executor, "cancel_trading_stop"):
+            try:
+                self.executor.cancel_trading_stop()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("failed to cancel exchange-native stop (%s)", exc)
 
     # ------------------------------------------------- exchange testnet/live
     def _exchange_setup_and_reconcile(self) -> None:
@@ -485,15 +553,15 @@ class BotRunner:
             want = ("Sell", self.broker.state.qty)
         if pos is None:
             if want is not None:
-                self.gate.kill_switch.trip(
-                    "startup reconciliation: exchange is flat, ledger holds a position"
-                )
-                log.error("reconciliation mismatch: exchange flat, ledger=%s", want)
+                msg = f"reconciliation mismatch: exchange is flat, ledger holds {want}"
+                self.gate.kill_switch.trip(msg)
+                self.notifier.alert("Reconciliation Mismatch", msg)
+                log.error(msg)
             return
         side = "Buy" if pos["side"] == "Buy" else "Sell"
         qty = pos["size"]
         if want is None or side != want[0] or abs(qty - want[1]) > max(1e-6, want[1] * 0.01):
-            self.gate.kill_switch.trip(
-                f"startup reconciliation mismatch: exchange={pos} ledger={want}"
-            )
-            log.error("reconciliation mismatch: exchange=%s ledger=%s", pos, want)
+            msg = f"reconciliation mismatch: exchange={pos} ledger={want}"
+            self.gate.kill_switch.trip(msg)
+            self.notifier.alert("Reconciliation Mismatch", msg)
+            log.error(msg)

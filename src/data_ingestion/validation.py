@@ -95,7 +95,7 @@ def validate_candles(
             (report.warnings if allow_gaps else report.errors).append(msg)
 
     if max_bar_move_pct is not None and interval_ms <= SPACING_CHECK_MAX_MS and len(d) > 1:
-        move = d["close"].pct_change().abs() * 100.0
+        move = d["close"].pct_change(fill_method=None).abs() * 100.0
         report.max_bar_move_pct = float(move.max(skipna=True) or 0.0)
         bad = move[move > max_bar_move_pct]
         if len(bad):

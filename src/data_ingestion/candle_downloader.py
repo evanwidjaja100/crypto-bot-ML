@@ -124,9 +124,10 @@ def download_range(
         frames.append(_download_chunk(client, symbol, interval, cursor, chunk_end, page_size))
         cursor = chunk_end
 
-    if not frames:
+    valid_frames = [f for f in frames if not f.empty]
+    if not valid_frames:
         return pd.DataFrame(columns=CANDLE_COLUMNS)
-    out = pd.concat(frames, ignore_index=True)
+    out = pd.concat(valid_frames, ignore_index=True)
     out = (
         out.sort_values("ts_ms").drop_duplicates(subset="ts_ms", keep="last").reset_index(drop=True)
     )

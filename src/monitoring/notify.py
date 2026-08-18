@@ -216,3 +216,13 @@ class Notifier:
             level="WARNING",
             metadata={"Consecutive Errors": streak, "Last Error": last_error[:200]},
         )
+
+    def alert(
+        self,
+        title: str,
+        message: str,
+        level: str = "CRITICAL",
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        """Generic high-priority alert dispatcher."""
+        return self.send(title=title, message=message, level=level, metadata=metadata)

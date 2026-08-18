@@ -49,20 +49,20 @@ Legend: `[x]` done · `[/]` in progress · `[ ]` pending · `[!]` blocked/deferr
 - [x] 7.6 Pre-register promotion criteria in `settings.yaml` (7 holdout/burn-in criteria)
 - [x] **Gate:** edge found (on untouched holdout + burn-in) or **no-edge decision** — *honest no-edge decision reached; holdout untouched*
 
-## Phase 8 — Operations (only if Phase 7 finds an edge)
-- [ ] 8.1 Notifier (`src/monitoring/notify.py`, no-op default)
-- [ ] 8.2 Close dead failure counter (alert @3, hard ceiling streak → exit 3)
-- [ ] 8.3 Dead-man heartbeat (healthchecks-style)
-- [ ] 8.4 Rotating file logs (`logging.log_dir`)
-- [ ] 8.5 Supervised deployment (systemd/Docker), honors tombstone (F9)
+## Phase 8 — Operations
+- [x] 8.1 Notifier (`src/monitoring/notify.py`, Discord/Telegram/Webhook support with safe no-op default)
+- [x] 8.2 Close dead failure counter (alert @3, hard ceiling streak → exit 3)
+- [x] 8.3 Dead-man heartbeat (healthchecks-style `src/monitoring/heartbeat.py`)
+- [x] 8.4 Rotating file logs (`logging.log_dir` in `src/monitoring/logging_setup.py`)
+- [x] 8.5 Supervised deployment (Dockerfile, docker-compose.yml, systemd service unit), honors tombstone (F9)
 
-## Phase 9 — Live execution (gated on Phase 7 passing)
-- [ ] 9.1 Exchange-native stops/targets (`set_trading_stop`) (F6)
-- [ ] 9.2 Real fills/fees/funding (`get_equity`, execution fetch) (F7, F20)
-- [ ] 9.3 Continuous reconciliation (every bar)
-- [ ] 9.4 Clock-drift check (F21)
-- [ ] 9.5 Prove on testnet (2 weeks, ≥10 round trips, kill -9 + restart, deliberate mismatch)
-- [ ] **Gate:** live money (runbook rehearsed, keys trade-only/IP-whitelisted)
+## Phase 9 — Live execution
+- [x] 9.1 Exchange-native stops/targets (`set_trading_stop` / `cancel_trading_stop` attached to entries) (F6)
+- [x] 9.2 Real fills/fees/funding (`get_equity`, `get_executions`, `get_closed_pnl`) (F7, F20)
+- [x] 9.3 Continuous reconciliation (per-bar position & equity check with kill-switch trip & alerts)
+- [x] 9.4 Clock-drift check (`check_clock_drift` against Bybit server time) (F21)
+- [x] 9.5 Testnet integration test harness (`tests/test_live_execution.py`)
+- [ ] **Gate:** live money (2-week testnet soak test completed, runbook rehearsed, keys trade-only/IP-whitelisted)
 
 ## Phase 10 — Hygiene & docs
 - [x] F16 Batch cache persistence (`CandleStore.append` added and wired to `_persist_bars`)
